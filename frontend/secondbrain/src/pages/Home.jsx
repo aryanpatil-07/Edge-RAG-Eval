@@ -153,9 +153,6 @@ const Home = ({ selectedNote, setSelectedNote, openChat, openChatWithTopic }) =>
     <div className="page">
       <div className="hero hero-row">
         <div>
-          <div className="hero-kicker">
-            <span className="hero-kicker-dot" /> Knowledge Intelligence
-          </div>
           <h1>Second Brain</h1>
           <p>Your intelligent note workspace with AI synthesis, analysis & chat.</p>
         </div>

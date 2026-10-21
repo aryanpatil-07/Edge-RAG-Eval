@@ -112,6 +112,91 @@ a:hover {
   margin: 0 auto;
   padding: 24px 32px 48px;
   position: relative;
+  z-index: 1;
+}
+
+/* ── Subtle Geometric Shape Background Overlay ── */
+.bg-shapes-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.shape-pattern {
+  position: absolute;
+  inset: 0;
+  background-image: 
+    url("data:image/svg+xml,%3Csvg width='44' height='44' viewBox='0 0 44 44' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M22 18v8M18 22h8' stroke='rgba(255,255,255,0.035)' stroke-width='1' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='22' r='0.8' fill='rgba(139,92,246,0.18)'/%3E%3Cpolygon points='22,6 24.5,8.5 22,11 19.5,8.5' fill='none' stroke='rgba(139,92,246,0.05)' stroke-width='0.75'/%3E%3Cpolygon points='6,22 8.5,24.5 6,27 3.5,24.5' fill='none' stroke='rgba(99,102,241,0.05)' stroke-width='0.75'/%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: repeat;
+  mask-image: radial-gradient(ellipse 90% 75% at 50% 15%, black 25%, transparent 85%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 75% at 50% 15%, black 25%, transparent 85%);
+}
+
+.shape-ambient-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.shape-glow-1 {
+  width: 520px;
+  height: 520px;
+  top: -120px;
+  right: -60px;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%);
+}
+
+.shape-glow-2 {
+  width: 440px;
+  height: 440px;
+  top: 30%;
+  left: -100px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.10) 0%, transparent 70%);
+}
+
+.shape-geo {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.shape-geo-1 {
+  top: -30px;
+  right: 4%;
+  animation: float-geo-1 30s ease-in-out infinite alternate;
+}
+
+.shape-geo-2 {
+  top: 32%;
+  left: -40px;
+  animation: float-geo-2 36s ease-in-out infinite alternate;
+}
+
+.shape-geo-3 {
+  bottom: 8%;
+  right: 6%;
+  animation: float-geo-3 40s ease-in-out infinite alternate;
+}
+
+@keyframes float-geo-1 {
+  0% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(18px) rotate(4deg); }
+  100% { transform: translateY(-10px) rotate(-3deg); }
+}
+
+@keyframes float-geo-2 {
+  0% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(-5deg); }
+  100% { transform: translateY(12px) rotate(3deg); }
+}
+
+@keyframes float-geo-3 {
+  0% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(16px) rotate(6deg); }
+  100% { transform: translateY(-14px) rotate(-4deg); }
 }
 
 /* ── Topbar (Floating Frosted Glass Pill) ── */
@@ -155,28 +240,30 @@ a:hover {
   50% { opacity: 1; transform: scale(1.2); }
 }
 
-.brand {
+.brand-title {
   font-family: var(--font-display);
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #ffffff 30%, #c4b5fd 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #f8fafc;
+  line-height: 1.25;
+  margin: 0;
 }
-.brand-subtitle {
-  font-size: 0.74rem;
-  color: var(--muted);
-  margin-top: 1px;
+
+@media (max-width: 640px) {
+  .brand-title {
+    font-size: 0.95rem;
+  }
 }
 
 .nav {
   display: flex;
-  gap: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 4px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  border: none;
 }
 .nav-pill {
   padding: 8px 20px;
@@ -185,19 +272,19 @@ a:hover {
   background: transparent;
   color: var(--muted);
   font-family: var(--font-display);
-  font-size: 0.84rem;
+  font-size: 0.88rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .nav-pill:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.06);
 }
 .nav-pill.active {
   background: var(--accent-grad);
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.18);
   box-shadow: 0 4px 18px var(--accent-glow);
 }
 
