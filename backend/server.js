@@ -27,9 +27,14 @@ app.use("/api/ai", aiRoute);
 app.use("/api/chat", chatRoutes);
 
 // DB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log("Connected Successfully"))
-  .catch(err => console.error(err));
+const mongoUri = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/secondbrain";
+if (mongoUri && !mongoUri.includes("<username>")) {
+  mongoose.connect(mongoUri)
+    .then(() => console.log("Connected Successfully to MongoDB"))
+    .catch(err => console.warn("MongoDB connection warning:", err.message));
+} else {
+  console.log("No valid MONGODB_URI configured in .env. Waiting for database credentials.");
+}
 
 // Root
 app.get("/", (req, res) => {

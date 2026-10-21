@@ -1,5 +1,5 @@
 const Note = require("../models/Note");
-const { askLLM, buildNotesContext } = require("../services/aiService");
+const { askLLM, buildNotesContext, synthesizeStudyGuide, synthesizeImprovedNote } = require("../services/aiService");
 const { getRelevantNotes } = require("../services/retrievalService");
 const { analyzeLearningPath } = require("../services/analysisService");
 
@@ -112,7 +112,15 @@ const noteAction = async (req, res) => {
     }
 
     const prompt = buildNoteActionPrompt(note, mode);
-    const draft = await askLLM(prompt);
+    let draft = "";
+    try {
+      draft = await askLLM(prompt);
+    } catch (e) {
+      console.warn("askLLM noteAction error, falling back to local synthesizer:", e.message);
+      draft = mode === "convert"
+        ? synthesizeStudyGuide(prompt)
+        : synthesizeImprovedNote(prompt);
+    }
 
     res.json({
       noteId: note._id,

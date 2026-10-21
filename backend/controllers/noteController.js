@@ -203,9 +203,11 @@ exports.reAnalyzeNote = async (req, res) => {
     const note = await Note.findById(req.params.id);
     if (!note) return res.status(404).json({ error: "Note not found" });
     const analysis = await analyzeNote(note);
-    if (!analysis) return res.status(422).json({ error: "Analysis could not be generated — note may be too short." });
+    if (!analysis) {
+      return res.status(500).json({ error: "Failed to generate analysis" });
+    }
     const updated = await Note.findByIdAndUpdate(req.params.id, { analysis }, { new: true });
-    res.json({ analysis: updated.analysis });
+    res.json({ analysis: updated ? updated.analysis : analysis });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -89,29 +89,39 @@ const Home = ({ selectedNote, setSelectedNote, openChat, openChatWithTopic }) =>
     setActionLoading(mode); setDraft(""); setDraftMode(mode);
     try {
       const res = await askNoteAction({ noteId: selectedNote._id, mode });
-      setDraft(res.draft || "");
-    } finally { setActionLoading(""); }
+      if (res?.draft) {
+        setDraft(res.draft);
+      }
+    } catch (err) {
+      console.error("Action error:", err);
+    } finally {
+      setActionLoading("");
+    }
   };
 
   const handleApplyDraft = async (draftText) => {
     if (!selectedNote?._id) return;
-    const updated = await updateNote(selectedNote._id, {
-      title: selectedNote.title, content: draftText, tags: selectedNote.tags || [],
-    });
-    setNotes((prev) => prev.map((n) => (n._id === updated._id ? updated : n)));
-    setSelectedNote(updated); 
-    setDraft(""); 
-    setDraftMode("");
-    
     try {
-      const reAnalyzed = await reAnalyzeNote(selectedNote._id);
-      if (reAnalyzed?.analysis) {
-        const updatedWithAnalysis = { ...updated, analysis: reAnalyzed.analysis };
-        setSelectedNote(updatedWithAnalysis);
-        setNotes((prev) => prev.map((n) => (n._id === updated._id ? updatedWithAnalysis : n)));
+      const updated = await updateNote(selectedNote._id, {
+        title: selectedNote.title, content: draftText, tags: selectedNote.tags || [],
+      });
+      setNotes((prev) => prev.map((n) => (n._id === updated._id ? updated : n)));
+      setSelectedNote(updated); 
+      setDraft(""); 
+      setDraftMode("");
+      
+      try {
+        const reAnalyzed = await reAnalyzeNote(selectedNote._id);
+        if (reAnalyzed?.analysis) {
+          const updatedWithAnalysis = { ...updated, analysis: reAnalyzed.analysis };
+          setSelectedNote(updatedWithAnalysis);
+          setNotes((prev) => prev.map((n) => (n._id === updated._id ? updatedWithAnalysis : n)));
+        }
+      } catch (error) {
+        console.error("Re-analysis error:", error);
       }
-    } catch (error) {
-      console.error("Re-analysis error:", error);
+    } catch (err) {
+      console.error("Apply draft error:", err);
     }
   };
 

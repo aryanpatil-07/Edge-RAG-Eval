@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -114,13 +114,6 @@ function TopicNode({ data }) {
 
 const nodeTypes = { topic: TopicNode };
 
-/* ─── Lane background panels ───────────────────────────────────────────────── */
-const LANE_LABELS = [
-  { y: LANE_Y.beginner - 20,     label: "🟢  Beginner",     color: "#22c55e" },
-  { y: LANE_Y.intermediate - 20, label: "🟣  Intermediate",  color: "#8b5cf6" },
-  { y: LANE_Y.advanced - 20,     label: "🟠  Advanced",      color: "#f97316" },
-];
-
 /* ─── Score ring ───────────────────────────────────────────────────────────── */
 function ScoreRing({ score }) {
   const r = 44, circ = 2 * Math.PI * r;
@@ -145,7 +138,6 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
   const [syncKey, setSyncKey]   = useState(0);
-  const flowRef                 = useRef(null);
 
   const handleReAnalyze = async () => {
     setLoading(true); setError("");
@@ -179,6 +171,10 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
     checkDB();
   }, [note._id]);
 
+  const handleNodeClick = (nodeLabel) => {
+    onTopicChat(nodeLabel, note);
+  };
+
   /* Build flow nodes + edges */
   const { initNodes, initEdges } = useMemo(() => {
     if (!analysis?.nodes?.length) return { initNodes: [], initEdges: [] };
@@ -194,6 +190,7 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
         label: n.label,
         level: n.level,
         isCurrent: n.id === analysis.currentNode || !!n.isCurrent,
+        onClick: () => handleNodeClick(n.label),
       },
     }));
 
@@ -218,12 +215,15 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
     return { initNodes, initEdges };
   }, [analysis, note]);
 
-  const [nodes, , onNodesChange] = useNodesState(initNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initEdges);
 
-  const handleNodeClick = (nodeLabel) => {
-    onTopicChat(nodeLabel, note);
-  };
+  useEffect(() => {
+    if (initNodes.length > 0) {
+      setNodes(initNodes);
+      setEdges(initEdges);
+    }
+  }, [initNodes, initEdges, setNodes, setEdges]);
 
   const LEVEL = { beginner: "Beginner", intermediate: "Intermediate", advanced: "Advanced", expert: "Expert" };
 

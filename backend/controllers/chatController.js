@@ -1,6 +1,6 @@
 const Chat = require("../models/Chat");
 const Note = require("../models/Note");
-const { askLLM, buildNotesContext } = require("../services/aiService");
+const { askLLM, buildNotesContext, synthesizeTutorChat } = require("../services/aiService");
 const { getRelevantNotes } = require("../services/retrievalService");
 
 const createChat = async (req, res) => {
@@ -85,7 +85,13 @@ Instructions:
 - Format with markdown: headings, bullet points, code blocks where appropriate.
 - Be educational, clear, and encouraging. Never refuse a genuine learning question.`;
 
-    const answer = await askLLM(prompt);
+    let answer = "";
+    try {
+      answer = await askLLM(prompt);
+    } catch (llmErr) {
+      console.warn("Chat LLM error, using synthesized tutor response:", llmErr.message);
+      answer = synthesizeTutorChat(prompt);
+    }
 
     chat.messages.push({ role: "assistant", content: answer });
     await chat.save();

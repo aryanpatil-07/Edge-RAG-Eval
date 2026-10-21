@@ -111,6 +111,48 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
     initializeChat();
   }, [selectedNote?._id]);
 
+  const sendMessageNow = async (text) => {
+    const msg = text.trim();
+    if (!msg) return;
+
+    let chatId = currentChatId;
+    if (!chatId) {
+      try {
+        const newChat = await createChat(currentNoteId || null);
+        chatId = newChat._id;
+        setCurrentChatId(chatId);
+      } catch (err) {
+        console.error("Failed to create chat:", err);
+      }
+    }
+    if (!chatId) return;
+
+    setInput("");
+    setLoading(true);
+    setMessages((prev) => [...prev, { role: "user", content: msg }]);
+    try {
+      const res = await sendChatMessage(chatId, msg, currentNoteId || null);
+      if (res?.answer) {
+        setMessages((prev) => [...prev, { role: "assistant", content: res.answer }]);
+      }
+    } catch (err) {
+      console.error("Chat error:", err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "I encountered an issue connecting to the chat service. Please try asking again.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendMessage = async () => {
+    await sendMessageNow(input);
+  };
+
   // Handle prefill topic - send once when ready
   useEffect(() => {
     if (prefillTopic && currentChatId && !sentPrefillRef.current) {
@@ -125,24 +167,6 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  const sendMessageNow = async (text) => {
-    const msg = text.trim();
-    if (!msg || !currentChatId) return;
-    setInput("");
-    setLoading(true);
-    setMessages((prev) => [...prev, { role: "user", content: msg }]);
-    try {
-      const res = await sendChatMessage(currentChatId, msg, currentNoteId || null);
-      setMessages((prev) => [...prev, { role: "assistant", content: res.answer }]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const sendMessage = async () => {
-    await sendMessageNow(input);
-  };
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 0, height: "calc(100vh - 120px)" }}>
@@ -318,16 +342,16 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
                         components={{
-                          h1: ({node, ...props}) => <h1 style={{marginTop: "1.4em", marginBottom: "0.6em", fontSize: "1.55rem"}} {...props} />,
-                          h2: ({node, ...props}) => <h2 style={{marginTop: "1.3em", marginBottom: "0.5em", fontSize: "1.3rem"}} {...props} />,
-                          h3: ({node, ...props}) => <h3 style={{marginTop: "1.2em", marginBottom: "0.4em", fontSize: "1.1rem"}} {...props} />,
-                          p: ({node, ...props}) => <p style={{margin: "0.8em 0"}} {...props} />,
-                          ul: ({node, ...props}) => <ul style={{paddingLeft: "1.8em", margin: "0.8em 0 1em"}} {...props} />,
-                          ol: ({node, ...props}) => <ol style={{paddingLeft: "1.8em", margin: "0.8em 0 1em"}} {...props} />,
-                          li: ({node, ...props}) => <li style={{margin: "0.5em 0", lineHeight: "1.7"}} {...props} />,
-                          blockquote: ({node, ...props}) => <blockquote style={{borderLeft: "4px solid #8b5cf6", margin: "1.2em 0", padding: "12px 0 12px 18px", fontStyle: "italic", background: "rgba(139,92,246,0.05)", borderRadius: "0 6px 6px 0"}} {...props} />,
-                          code: ({node, ...props}) => <code style={{background: "rgba(139,92,246,0.13)", border: "1px solid rgba(139,92,246,0.2)", color: "#c4b5fd", padding: "3px 8px", borderRadius: "5px", fontSize: "0.88em"}} {...props} />,
-                          pre: ({node, ...props}) => <pre style={{background: "#1c2029", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", padding: "16px 18px", overflow: "auto", margin: "1.2em 0"}} {...props} />,
+                          h1: ({node: _node, ...props}) => <h1 style={{marginTop: "1.4em", marginBottom: "0.6em", fontSize: "1.55rem"}} {...props} />,
+                          h2: ({node: _node, ...props}) => <h2 style={{marginTop: "1.3em", marginBottom: "0.5em", fontSize: "1.3rem"}} {...props} />,
+                          h3: ({node: _node, ...props}) => <h3 style={{marginTop: "1.2em", marginBottom: "0.4em", fontSize: "1.1rem"}} {...props} />,
+                          p: ({node: _node, ...props}) => <p style={{margin: "0.8em 0"}} {...props} />,
+                          ul: ({node: _node, ...props}) => <ul style={{paddingLeft: "1.8em", margin: "0.8em 0 1em"}} {...props} />,
+                          ol: ({node: _node, ...props}) => <ol style={{paddingLeft: "1.8em", margin: "0.8em 0 1em"}} {...props} />,
+                          li: ({node: _node, ...props}) => <li style={{margin: "0.5em 0", lineHeight: "1.7"}} {...props} />,
+                          blockquote: ({node: _node, ...props}) => <blockquote style={{borderLeft: "4px solid #8b5cf6", margin: "1.2em 0", padding: "12px 0 12px 18px", fontStyle: "italic", background: "rgba(139,92,246,0.05)", borderRadius: "0 6px 6px 0"}} {...props} />,
+                          code: ({node: _node, ...props}) => <code style={{background: "rgba(139,92,246,0.13)", border: "1px solid rgba(139,92,246,0.2)", color: "#c4b5fd", padding: "3px 8px", borderRadius: "5px", fontSize: "0.88em"}} {...props} />,
+                          pre: ({node: _node, ...props}) => <pre style={{background: "#1c2029", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", padding: "16px 18px", overflow: "auto", margin: "1.2em 0"}} {...props} />,
                         }}
                       >
                         {msg.content}
