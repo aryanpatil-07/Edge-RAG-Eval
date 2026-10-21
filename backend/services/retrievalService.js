@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Note = require("../models/Note");
 
 const STOP_WORDS = new Set([
@@ -35,7 +36,12 @@ const getRelevantNotes = async (question) => {
     return [];
   }
 
+  if (mongoose.connection.readyState !== 1) {
+    return [];
+  }
+
   const keywords = extractKeywords(question);
+
 
   if (keywords.length === 0) {
     return [];

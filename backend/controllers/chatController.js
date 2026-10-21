@@ -1,12 +1,23 @@
+const mongoose = require("mongoose");
 const Chat = require("../models/Chat");
 const Note = require("../models/Note");
 const { askLLM, buildNotesContext, synthesizeTutorChat } = require("../services/aiService");
 const { getRelevantNotes } = require("../services/retrievalService");
 
+const isDbConnected = () => mongoose.connection.readyState === 1;
+const memoryChats = new Map();
+
 const createChat = async (req, res) => {
   try {
     const { noteId = null } = req.body || {};
-    const chat = await Chat.create({ messages: [], noteId: noteId || null });
+    if (isDbConnected()) {
+      const chat = await Chat.create({ messages: [], noteId: noteId || null });
+      return res.status(201).json(chat);
+    }
+
+    const chatId = `chat-${Date.now()}`;
+    const chat = { _id: chatId, messages: [], noteId: noteId || null };
+    memoryChats.set(chatId, chat);
     res.status(201).json(chat);
   } catch (error) {
     console.error("Create chat error:", error.message);
@@ -16,7 +27,13 @@ const createChat = async (req, res) => {
 
 const getChat = async (req, res) => {
   try {
-    const chat = await Chat.findById(req.params.chatId);
+    if (isDbConnected()) {
+      const chat = await Chat.findById(req.params.chatId);
+      if (!chat) return res.status(404).json({ error: "Chat not found" });
+      return res.json(chat);
+    }
+
+    const chat = memoryChats.get(req.params.chatId);
     if (!chat) return res.status(404).json({ error: "Chat not found" });
     res.json(chat);
   } catch (error) {
@@ -34,7 +51,12 @@ const sendMessage = async (req, res) => {
       return res.status(400).json({ error: "message is required" });
     }
 
-    const chat = await Chat.findById(chatId);
+    let chat;
+    if (isDbConnected()) {
+      chat = await Chat.findById(chatId);
+    } else {
+      chat = memoryChats.get(chatId);
+    }
     if (!chat) return res.status(404).json({ error: "Chat not found" });
 
     // Save user message
@@ -52,7 +74,14 @@ const sendMessage = async (req, res) => {
     let studySubject = "your notes";
 
     if (selectedNoteId) {
-      const selectedNote = await Note.findById(selectedNoteId);
+      let selectedNote = null;
+      if (isDbConnected()) {
+        try {
+          selectedNote = await Note.findById(selectedNoteId);
+        } catch {
+          selectedNote = null;
+        }
+      }
       if (selectedNote) {
         notesContext = buildNotesContext([selectedNote]);
         studySubject = selectedNote.title;
@@ -60,11 +89,15 @@ const sendMessage = async (req, res) => {
       }
     }
 
-    if (!notesContext) {
-      const relevant = await getRelevantNotes(message);
-      if (relevant.length > 0) {
-        notesContext = buildNotesContext(relevant);
-        studySubject = relevant.map((n) => n.title).join(", ");
+    if (!notesContext && isDbConnected()) {
+      try {
+        const relevant = await getRelevantNotes(message);
+        if (relevant.length > 0) {
+          notesContext = buildNotesContext(relevant);
+          studySubject = relevant.map((n) => n.title).join(", ");
+        }
+      } catch {
+        // proceed without notes context
       }
     }
 
@@ -94,7 +127,11 @@ Instructions:
     }
 
     chat.messages.push({ role: "assistant", content: answer });
-    await chat.save();
+    if (typeof chat.save === "function") {
+      await chat.save();
+    } else {
+      memoryChats.set(chatId, chat);
+    }
 
     res.json({ answer, chatId: chat._id });
   } catch (error) {

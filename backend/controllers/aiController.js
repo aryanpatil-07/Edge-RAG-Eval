@@ -1,4 +1,6 @@
+const mongoose = require("mongoose");
 const Note = require("../models/Note");
+const { getNoteByIdInternal } = require("./noteController");
 const { askLLM, buildNotesContext, synthesizeStudyGuide, synthesizeImprovedNote } = require("../services/aiService");
 const { getRelevantNotes } = require("../services/retrievalService");
 const { analyzeLearningPath } = require("../services/analysisService");
@@ -105,7 +107,17 @@ const noteAction = async (req, res) => {
       return res.status(400).json({ error: "mode must be convert or improve" });
     }
 
-    const note = await Note.findById(noteId);
+    let note = null;
+    if (mongoose.Types.ObjectId.isValid(noteId) && mongoose.connection.readyState === 1) {
+      try {
+        note = await Note.findById(noteId);
+      } catch {
+        note = null;
+      }
+    }
+    if (!note) {
+      note = getNoteByIdInternal(noteId);
+    }
 
     if (!note) {
       return res.status(404).json({ error: "Note not found" });

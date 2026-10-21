@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { animateDraftReveal, animateButtonPress } from "../utils/animations";
 
 const NoteDetail = ({
   note,
@@ -18,6 +19,7 @@ const NoteDetail = ({
 
   useEffect(() => {
     if (draft && draftRef.current) {
+      animateDraftReveal(draftRef.current);
       draftRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }, [draft]);
@@ -54,7 +56,10 @@ const NoteDetail = ({
           <button
             type="button"
             className="analysis-trigger-btn"
-            onClick={onOpenAnalysis}
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              onOpenAnalysis();
+            }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight:6}}>
               <path d="M2 20h20M6 20V10M12 20V4M18 20v-6"/>
@@ -64,7 +69,10 @@ const NoteDetail = ({
           <button
             type="button"
             className="secondary-button"
-            onClick={() => onRunAction("convert")}
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              onRunAction("convert");
+            }}
             disabled={actionLoading !== ""}
           >
             {actionLoading === "convert" ? "Converting…" : "Convert format"}
@@ -72,12 +80,22 @@ const NoteDetail = ({
           <button
             type="button"
             className="secondary-button"
-            onClick={() => onRunAction("improve")}
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              onRunAction("improve");
+            }}
             disabled={actionLoading !== ""}
           >
             {actionLoading === "improve" ? "Improving…" : "Improve with AI"}
           </button>
-          <button type="button" className="primary-button" onClick={onOpenChat}>
+          <button 
+            type="button" 
+            className="primary-button" 
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              onOpenChat();
+            }}
+          >
             Chat about note
           </button>
         </div>

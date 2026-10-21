@@ -11,8 +11,9 @@
  * @concept JavaScript — Hoisting
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createImageNote, createNote } from "../services/api";
+import { animateModalEnter, animateButtonPress } from "../utils/animations";
 
 /**
  * Function Declaration Hoisting Example
@@ -60,6 +61,15 @@ const AddNote = ({ onCreated, onClose }) => {
   const [imageFile, setImageFile] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const backdropRef = useRef(null);
+  const modalRef    = useRef(null);
+
+  useEffect(() => {
+    if (modalRef.current) {
+      animateModalEnter(backdropRef.current, modalRef.current);
+    }
+  }, []);
+
   /**
    * Async Form Submission Handler
    * @concept JavaScript — async/await
@@ -96,8 +106,18 @@ const AddNote = ({ onCreated, onClose }) => {
   };
 
   return (
-    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className="modal-card" role="dialog" aria-modal="true" aria-label="Add note">
+    <div 
+      ref={backdropRef}
+      className="modal-backdrop" 
+      onClick={(e) => e.target === e.currentTarget && onClose?.()}
+    >
+      <div 
+        ref={modalRef}
+        className="modal-card" 
+        role="dialog" 
+        aria-modal="true" 
+        aria-label="Add note"
+      >
         <div className="modal-header">
           <div>
             <h2>New Note</h2>
@@ -139,10 +159,22 @@ const AddNote = ({ onCreated, onClose }) => {
           </label>
 
           <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={onClose}>
+            <button 
+              type="button" 
+              className="secondary-button" 
+              onClick={(e) => {
+                animateButtonPress(e.currentTarget);
+                onClose?.();
+              }}
+            >
               Cancel
             </button>
-            <button type="submit" className="primary-button" disabled={submitting}>
+            <button 
+              type="submit" 
+              className="primary-button" 
+              disabled={submitting}
+              onClick={(e) => animateButtonPress(e.currentTarget)}
+            >
               {submitting ? "Saving…" : imageFile ? "Upload & Save" : "Add Note"}
             </button>
           </div>

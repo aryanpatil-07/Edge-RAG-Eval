@@ -1,3 +1,5 @@
+import { animateButtonPress } from "../utils/animations";
+
 const cardTones = ["tone-coral", "tone-yellow", "tone-cream", "tone-mint"];
 
 /** Returns the first non-empty line of text from markdown/plain content */
@@ -14,13 +16,18 @@ const NoteCard = ({ note, onDelete, onSelect, index = 0, active = false }) => {
   const toneClass = cardTones[index % cardTones.length];
   const preview = getFirstLine(note.content);
 
+  const handleClick = (e) => {
+    animateButtonPress(e.currentTarget);
+    onSelect?.(note);
+  };
+
   return (
     <div
       className={`note-card ${toneClass} ${active ? "selected" : ""}`}
-      onClick={() => onSelect?.(note)}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === "Enter" && onSelect?.(note)}
+      onKeyDown={(e) => e.key === "Enter" && handleClick(e)}
     >
       <div className="note-card-header">
         <div className="note-card-titles">
@@ -35,35 +42,11 @@ const NoteCard = ({ note, onDelete, onSelect, index = 0, active = false }) => {
             className="note-delete-btn"
             onClick={(e) => {
               e.stopPropagation();
+              animateButtonPress(e.currentTarget);
               onDelete(note._id);
             }}
             type="button"
             aria-label="Delete note"
-            style={{
-              flexShrink: 0,
-              border: "1px solid rgba(239,68,68,0.35)",
-              borderRadius: "8px",
-              padding: "8px 14px",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-              background: "rgba(239,68,68,0.12)",
-              color: "#fca5a5",
-              transition: "all 0.18s ease",
-              whiteSpace: "nowrap",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => {
-              e.target.style.background = "rgba(239,68,68,0.25)";
-              e.target.style.borderColor = "rgba(239,68,68,0.6)";
-              e.target.style.color = "#ff9999";
-            }}
-            onMouseLeave={(e) => {
-              e.target.style.background = "rgba(239,68,68,0.12)";
-              e.target.style.borderColor = "rgba(239,68,68,0.35)";
-              e.target.style.color = "#fca5a5";
-            }}
           >
             Delete
           </button>
@@ -72,17 +55,26 @@ const NoteCard = ({ note, onDelete, onSelect, index = 0, active = false }) => {
 
       {preview && <p className="note-card-copy">{preview}</p>}
 
-      {note.tags?.length > 0 && (
-        <div className="tag-list">
-          {note.tags.map((tag) => (
-            <span key={tag} className="tag-pill">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
+      <div className="note-card-footer">
+        {note.tags?.length > 0 && (
+          <div className="tag-list">
+            {note.tags.map((tag) => (
+              <span key={tag} className="tag-pill">
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
 
-      {note.imageUrl ? <span className="attachment-badge">📷 Has image</span> : null}
+        <div className="note-card-badges">
+          {note.analysis && (
+            <span className={`analysis-pill-badge level-${note.analysis.level}`} title="Knowledge analysis completed">
+              ✦ {note.analysis.score}/100
+            </span>
+          )}
+          {note.imageUrl ? <span className="attachment-badge">📷 Image</span> : null}
+        </div>
+      </div>
     </div>
   );
 };

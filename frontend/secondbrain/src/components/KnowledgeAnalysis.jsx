@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,6 +11,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getNote, reAnalyzeNote } from "../services/api";
+import { animateModalEnter, animateNumber, animateStaggeredList, animateButtonPress } from "../utils/animations";
 
 /* ─── Layout constants ─────────────────────────────────────────────────────── */
 const NODE_W  = 180;
@@ -117,8 +118,17 @@ const nodeTypes = { topic: TopicNode };
 /* ─── Score ring ───────────────────────────────────────────────────────────── */
 function ScoreRing({ score }) {
   const r = 44, circ = 2 * Math.PI * r;
-  const offset = circ - (score / 100) * circ;
-  const color = score >= 75 ? "#4ade80" : score >= 45 ? "#a78bfa" : "#f97316";
+  const safeScore = typeof score === "number" ? Math.max(0, Math.min(100, score)) : 0;
+  const offset = circ - (safeScore / 100) * circ;
+  const color = safeScore >= 75 ? "#4ade80" : safeScore >= 45 ? "#a78bfa" : "#f97316";
+  const numRef = useRef(null);
+
+  useEffect(() => {
+    if (numRef.current) {
+      animateNumber(numRef.current, safeScore, 900);
+    }
+  }, [safeScore]);
+
   return (
     <svg width="110" height="110" viewBox="0 0 110 110">
       <circle cx="55" cy="55" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="9" />
@@ -126,7 +136,7 @@ function ScoreRing({ score }) {
         strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
         style={{ transform: "rotate(-90deg)", transformOrigin: "55px 55px", transition: "stroke-dashoffset 1s ease" }}
       />
-      <text x="55" y="51" textAnchor="middle" fill={color} fontSize="22" fontWeight="800" fontFamily="inherit">{score}</text>
+      <text ref={numRef} x="55" y="51" textAnchor="middle" fill={color} fontSize="22" fontWeight="800" fontFamily="inherit">0</text>
       <text x="55" y="67" textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize="11" fontFamily="inherit">/ 100</text>
     </svg>
   );
@@ -138,6 +148,25 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
   const [syncKey, setSyncKey]   = useState(0);
+
+  const backdropRef = useRef(null);
+  const modalRef    = useRef(null);
+
+  useEffect(() => {
+    if (modalRef.current) {
+      animateModalEnter(backdropRef.current, modalRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (analysis?.nodes?.length) {
+      const timer = setTimeout(() => {
+        animateStaggeredList(".topic-card-btn", 30);
+      }, 40);
+      return () => clearTimeout(timer);
+    }
+  }, [analysis, syncKey]);
+
 
   const handleReAnalyze = async () => {
     setLoading(true); setError("");
@@ -228,17 +257,33 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
   const LEVEL = { beginner: "Beginner", intermediate: "Intermediate", advanced: "Advanced", expert: "Expert" };
 
   return (
-    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="analysis-modal" role="dialog" aria-modal="true">
+    <div 
+      ref={backdropRef}
+      className="modal-backdrop" 
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div 
+        ref={modalRef}
+        className="analysis-modal" 
+        role="dialog" 
+        aria-modal="true"
+      >
 
         {/* ── Header ── */}
         <div className="analysis-modal-header">
           <div>
-            <p className="detail-kicker">Knowledge Analysis</p>
+            <p className="detail-kicker">Knowledge Assessment</p>
             <h2>{note.title}</h2>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button className="secondary-button" onClick={handleReAnalyze} disabled={loading}>
+            <button 
+              className="secondary-button" 
+              onClick={(e) => {
+                animateButtonPress(e.currentTarget);
+                handleReAnalyze();
+              }} 
+              disabled={loading}
+            >
               {loading ? "Analyzing…" : "Re-analyze"}
             </button>
             <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
@@ -352,7 +397,11 @@ export default function KnowledgeAnalysis({ note, onClose, onTopicChat }) {
                     return (
                       <button
                         key={n.id}
-                        onClick={() => onTopicChat(n.label, note)}
+                        className="topic-card-btn"
+                        onClick={(e) => {
+                          animateButtonPress(e.currentTarget);
+                          onTopicChat(n.label, note);
+                        }}
                         style={{
                           background: t.bg,
                           border: `2px solid ${t.border}`,

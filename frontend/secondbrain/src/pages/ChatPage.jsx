@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createChat, getChat, sendChatMessage } from "../services/api";
+import { animateChatMessageIn, animateButtonPress } from "../utils/animations";
 
 /**
  * @file ChatPage.jsx
@@ -24,6 +25,14 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
   const [sidebarLoading, setSidebarLoading] = useState(true);
   const bottomRef                       = useRef(null);
   const sentPrefillRef                  = useRef(false);
+  const lastMsgRef                      = useRef(null);
+
+  // Trigger Anime.js slide-up & fade on new message arrival
+  useEffect(() => {
+    if (messages.length > 0 && lastMsgRef.current) {
+      animateChatMessageIn(lastMsgRef.current);
+    }
+  }, [messages.length]);
 
   // Load all existing chats from localStorage on initial mount
   useEffect(() => {
@@ -211,7 +220,8 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
               return (
                 <button
                   key={noteId}
-                  onClick={() => {
+                  onClick={(e) => {
+                    animateButtonPress(e.currentTarget);
                     setCurrentChatId(chatId);
                     setCurrentNoteId(noteId);
                     // Load messages for this chat
@@ -312,6 +322,8 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
             messages.map((msg, i) => (
               <div 
                 key={i} 
+                ref={i === messages.length - 1 ? lastMsgRef : null}
+                className="chat-msg-row"
                 style={{
                   display: "flex",
                   justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
@@ -439,7 +451,10 @@ const ChatPage = ({ selectedNote, prefillTopic, onPrefillUsed }) => {
           />
           <button 
             className="primary-button" 
-            onClick={sendMessage} 
+            onClick={(e) => {
+              animateButtonPress(e.currentTarget);
+              sendMessage();
+            }} 
             disabled={loading}
             style={{
               minWidth: "80px",

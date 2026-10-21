@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import Home from "./pages/Home";
 import ChatPage from "./pages/ChatPage";
+import { animatePageTransition } from "./utils/animations";
 
 function App() {
   const [activePage, setActivePage]     = useState("notes");
   const [selectedNote, setSelectedNote] = useState(null);
   const [prefillTopic, setPrefillTopic] = useState("");
+  const pageWrapRef                     = useRef(null);
 
   const openChat = () => {
     setPrefillTopic("");
@@ -19,14 +21,24 @@ function App() {
     setActivePage("chat");
   };
 
+  // Trigger Anime.js transition on tab/page change
+  useEffect(() => {
+    if (pageWrapRef.current) {
+      animatePageTransition(pageWrapRef.current);
+    }
+  }, [activePage]);
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
-          <div className="brand">Second Brain</div>
-          <p className="brand-subtitle">Notes, search, and chat in one workspace.</p>
+        <div className="brand-wrap">
+          <div className="brand-dot" aria-hidden="true" />
+          <div>
+            <div className="brand">Second Brain</div>
+            <p className="brand-subtitle">Intelligent Note Synthesis & Chat</p>
+          </div>
         </div>
-        <nav className="nav">
+        <nav className="nav" aria-label="Main navigation">
           <button
             className={activePage === "notes" ? "nav-pill active" : "nav-pill"}
             onClick={() => setActivePage("notes")}
@@ -42,20 +54,22 @@ function App() {
         </nav>
       </header>
 
-      {activePage === "notes" ? (
-        <Home
-          selectedNote={selectedNote}
-          setSelectedNote={setSelectedNote}
-          openChat={openChat}
-          openChatWithTopic={openChatWithTopic}
-        />
-      ) : (
-        <ChatPage
-          selectedNote={selectedNote}
-          prefillTopic={prefillTopic}
-          onPrefillUsed={() => setPrefillTopic("")}
-        />
-      )}
+      <main ref={pageWrapRef} className="page-container">
+        {activePage === "notes" ? (
+          <Home
+            selectedNote={selectedNote}
+            setSelectedNote={setSelectedNote}
+            openChat={openChat}
+            openChatWithTopic={openChatWithTopic}
+          />
+        ) : (
+          <ChatPage
+            selectedNote={selectedNote}
+            prefillTopic={prefillTopic}
+            onPrefillUsed={() => setPrefillTopic("")}
+          />
+        )}
+      </main>
     </div>
   );
 }

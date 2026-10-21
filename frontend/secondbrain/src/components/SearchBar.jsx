@@ -1,3 +1,5 @@
+import { animateButtonPress } from "../utils/animations";
+
 const SearchBar = ({ searchQuery, setSearchQuery }) => {
   return (
     <div className="search-bar">
@@ -9,12 +11,19 @@ const SearchBar = ({ searchQuery, setSearchQuery }) => {
       </span>
       <input
         type="text"
-        placeholder="Search notes..."
+        placeholder="Search notes across titles, tags, and content..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
       />
       {searchQuery && (
-        <button className="search-clear" onClick={() => setSearchQuery("")} aria-label="Clear search">
+        <button 
+          className="search-clear" 
+          onClick={(e) => {
+            animateButtonPress(e.currentTarget);
+            setSearchQuery("");
+          }} 
+          aria-label="Clear search"
+        >
           ×
         </button>
       )}

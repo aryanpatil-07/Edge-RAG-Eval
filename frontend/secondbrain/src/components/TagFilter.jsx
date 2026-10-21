@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { animateButtonPress } from "../utils/animations";
 
 const TagFilter = ({ selectedTag, setSelectedTag, noteTags = [] }) => {
   const [inputValue, setInputValue] = useState("");
@@ -19,13 +20,23 @@ const TagFilter = ({ selectedTag, setSelectedTag, noteTags = [] }) => {
     }
   };
 
+  const handleTagClick = (e, tag) => {
+    animateButtonPress(e.currentTarget);
+    setSelectedTag(selectedTag === tag ? "" : tag);
+  };
+
+  const handleClear = (e) => {
+    animateButtonPress(e.currentTarget);
+    setSelectedTag("");
+  };
+
   return (
     <div className="tag-filter-wrapper">
       <div className="tag-input-row">
         <input
           type="text"
           className="tag-type-input"
-          placeholder="Type a tag and press Enter…"
+          placeholder="Filter or add tags (press Enter)…"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -38,14 +49,14 @@ const TagFilter = ({ selectedTag, setSelectedTag, noteTags = [] }) => {
             <button
               key={tag}
               className={selectedTag === tag ? "tag active" : "tag"}
-              onClick={() => setSelectedTag(selectedTag === tag ? "" : tag)}
+              onClick={(e) => handleTagClick(e, tag)}
             >
-              {tag}
+              #{tag}
             </button>
           ))}
           {selectedTag && (
-            <button className="tag clear" onClick={() => setSelectedTag("")}>
-              Clear
+            <button className="tag clear" onClick={handleClear}>
+              Clear filter
             </button>
           )}
         </div>
