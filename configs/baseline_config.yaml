@@ -1,0 +1,10 @@
+experiment:
+  name: "gemma_distractor_baseline"
+  seed: 42
+models:
+  embedding: "sentence-transformers/all-MiniLM-L6-v2"
+  generator: "gemma:2b"
+  device: "auto"
+evaluation:
+  sample_size: 500
+  batch_size: 16
