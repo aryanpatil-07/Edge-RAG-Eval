@@ -97,6 +97,21 @@ python -m src.pipeline --test
    - Outputs a clean summary table via `rich`
    - Exits with return code `0`
 
+### Run Deterministic Gemma-2B Generation Test
+```powershell
+python -m src.pipeline --test-generation
+```
+
+#### Expected Output
+1. **Ollama / Backend Reachability**:
+   - Queries local Ollama daemon at `http://localhost:11434` for model `gemma:2b`
+   - If Ollama is unavailable, displays start-up instructions and falls back gracefully to local deterministic engine
+2. **Determinism & Reproducibility Verification**:
+   - Executes two consecutive generation passes under `temperature=0.0` and `seed=42`
+   - Prompt: `"State the chemical formula for water and briefly explain its molecular geometry in one sentence."`
+   - Verifies 100% bit-for-bit exact string equivalence (`Pass: Determinism Verified`)
+   - Logs tokens generated, throughput (tokens/sec), and latency in a clean `rich` table
+
 ### Custom Config Execution
 ```powershell
 python -m src.pipeline --config configs/baseline_config.yaml
@@ -106,7 +121,7 @@ python -m src.pipeline --config configs/baseline_config.yaml
 
 ## Running Unit & Integration Tests
 
-The test suite validates model initialization, output dimensionality, batched inference, metric computations, and CLI argument parsing:
+The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, and deterministic generation:
 
 ```powershell
 pytest tests/
@@ -116,6 +131,10 @@ pytest tests/
 
 ## Core Modules Overview
 
+- **`src.models.inference.GemmaInferenceClient`**:
+  Deterministic text generation engine wrapping Ollama REST API and Hugging Face pipelines with explicit context budgeting and reproducible decoding (`temperature=0.0`, `seed=42`).
+- **`src.models.inference.GenerationResult`**:
+  Validated Pydantic model encapsulating response text, token counts, throughput, latency, and ISO timestamps.
 - **`src.models.inference.EmbeddingClient`**:
   High-throughput, device-agnostic sentence embedding wrapper with automatic GPU/MPS/CPU dispatch and L2 normalization.
 - **`src.models.calm_mini.CALMMiniCrossAttention`**:

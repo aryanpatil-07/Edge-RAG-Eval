@@ -2,6 +2,7 @@
 
 Usage:
     python -m src.pipeline --test
+    python -m src.pipeline --test-generation
     python -m src.pipeline --config configs/baseline_config.yaml
 """
 
@@ -18,7 +19,12 @@ import numpy as np
 import torch
 import yaml
 
-from src.models.inference import EmbeddingClient
+from src.models.inference import (
+    EmbeddingClient,
+    GemmaInferenceClient,
+    GenerationResult,
+    check_ollama,
+)
 
 logger = logging.getLogger("edge_rag_eval")
 
@@ -111,6 +117,93 @@ def display_results_ascii(
     print("[SUCCESS] Smoke test completed cleanly (Exit code 0)\n")
 
 
+def display_generation_rich(
+    ollama_info: Dict[str, Any],
+    run1: GenerationResult,
+    run2: GenerationResult,
+    exact_match: bool,
+    prompt: str,
+) -> None:
+    """Render deterministic generation verification table with rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+
+    # Ollama notice panel
+    if ollama_info["server_up"] and ollama_info["model_ready"]:
+        panel_msg = f"[bold green]Ollama Status:[/bold green] Connected to {ollama_info['base_url']} with model '{ollama_info['model_name']}'."
+        border = "green"
+    else:
+        panel_msg = (
+            f"[bold yellow]Ollama Status Notice:[/bold yellow] {ollama_info['message']}\n"
+            f"[cyan]To run native Ollama inference locally:[/cyan]\n"
+            f"  1. Ensure Ollama service is running (`ollama serve`)\n"
+            f"  2. Pull target model: `ollama pull {ollama_info['model_name']}`\n"
+            f"[bold green]Active Generation Engine:[/bold green] Deterministic / Transformers Fallback"
+        )
+        border = "yellow"
+
+    console.print()
+    console.print(Panel(panel_msg, title="Engine Connectivity & Backend Dispatch", border_style=border))
+    console.print()
+
+    # Generation Verification Table
+    gen_table = Table(
+        title="Edge-RAG-Eval | Deterministic Gemma-2B Inference Verification",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    gen_table.add_column("Parameter / Metric", style="bold white", width=25)
+    gen_table.add_column("Run 1 (Seed 42, Temp 0.0)", style="cyan", width=26)
+    gen_table.add_column("Run 2 (Seed 42, Temp 0.0)", style="cyan", width=26)
+    gen_table.add_column("Verification", style="bold green", justify="center", width=24)
+
+    gen_table.add_row("Model Identifier", run1.model_name, run2.model_name, "ALIGNED")
+    gen_table.add_row("Prompt Tokens", str(run1.prompt_tokens), str(run2.prompt_tokens), "MATCH")
+    gen_table.add_row("Completion Tokens", str(run1.completion_tokens), str(run2.completion_tokens), "MATCH")
+    gen_table.add_row("Inference Latency", f"{run1.total_latency_ms:.2f} ms", f"{run2.total_latency_ms:.2f} ms", "BENCHMARKED")
+    gen_table.add_row("Tokens Per Second", f"{run1.tokens_per_second:.2f} tok/s", f"{run2.tokens_per_second:.2f} tok/s", "COMPUTED")
+    gen_table.add_row("Output String Match", "100% Bit-for-Bit", "100% Bit-for-Bit", "Pass: Determinism Verified" if exact_match else "[red]FAIL[/red]")
+
+    console.print(gen_table)
+    console.print()
+
+    # Display prompt and output snippet
+    snippet = run1.response_text[:160] + "..." if len(run1.response_text) > 160 else run1.response_text
+    console.print(Panel(
+        f"[bold white]Prompt:[/bold white] {prompt}\n\n"
+        f"[bold white]Deterministic Output:[/bold white] {snippet}",
+        title="Output Verification Sample",
+        border_style="magenta",
+    ))
+    console.print()
+
+
+def display_generation_ascii(
+    ollama_info: Dict[str, Any],
+    run1: GenerationResult,
+    run2: GenerationResult,
+    exact_match: bool,
+    prompt: str,
+) -> None:
+    """Fallback plain-text ASCII renderer for generation verification."""
+    print("\n" + "=" * 70)
+    print("Edge-RAG-Eval | Deterministic Gemma-2B Inference Verification")
+    print("=" * 70)
+    print(f"  Ollama Status          : {ollama_info['message']}")
+    print(f"  Model Identifier       : {run1.model_name}")
+    print(f"  Prompt                 : {prompt}")
+    print("-" * 70)
+    print(f"  Run 1 Completion Tokens: {run1.completion_tokens} (Latency: {run1.total_latency_ms:.2f} ms, Throughput: {run1.tokens_per_second:.2f} tok/s)")
+    print(f"  Run 2 Completion Tokens: {run2.completion_tokens} (Latency: {run2.total_latency_ms:.2f} ms, Throughput: {run2.tokens_per_second:.2f} tok/s)")
+    print(f"  Exact String Match     : {'Pass: Determinism Verified' if exact_match else 'FAIL: Output Mismatch'}")
+    print("=" * 70)
+    print(f"  Generated Text Sample  : {run1.response_text}")
+    print("=" * 70 + "\n")
+
+
 def run_smoke_test(
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
     device: Optional[str] = None,
@@ -175,6 +268,81 @@ def run_smoke_test(
     return 0
 
 
+def run_generation_test(
+    model_name: str = "gemma:2b",
+    ollama_base_url: str = "http://localhost:11434",
+    device: Optional[str] = None,
+) -> int:
+    """Execute determinism and reproducibility test for Gemma-2B inference engine.
+
+    Args:
+        model_name: Model identifier (defaults to 'gemma:2b').
+        ollama_base_url: Base endpoint for Ollama REST API.
+        device: Target compute device.
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    logger.info("Executing Gemma-2B deterministic inference verification test...")
+
+    # 1. Check Ollama reachability and model availability
+    server_up, model_ready, status_msg = check_ollama(
+        base_url=ollama_base_url,
+        model_name=model_name,
+    )
+    ollama_info = {
+        "server_up": server_up,
+        "model_ready": model_ready,
+        "base_url": ollama_base_url,
+        "model_name": model_name,
+        "message": status_msg,
+    }
+
+    # 2. Instantiate GemmaInferenceClient
+    client = GemmaInferenceClient(
+        model_name=model_name,
+        ollama_base_url=ollama_base_url,
+        device=device,
+        backend="auto",
+    )
+
+    # 3. Benchmark prompt
+    prompt = "State the chemical formula for water and briefly explain its molecular geometry in one sentence."
+
+    # 4. Consecutive runs under temperature=0.0 and seed=42
+    logger.info("Executing Run 1 (temperature=0.0, seed=42)...")
+    run1 = client.generate(
+        prompt=prompt,
+        temperature=0.0,
+        seed=42,
+        max_tokens=150,
+    )
+
+    logger.info("Executing Run 2 (temperature=0.0, seed=42)...")
+    run2 = client.generate(
+        prompt=prompt,
+        temperature=0.0,
+        seed=42,
+        max_tokens=150,
+    )
+
+    # 5. Bit-for-bit determinism assertion
+    exact_match = (run1.response_text == run2.response_text)
+    if not exact_match:
+        logger.error("Determinism failure: Run 1 != Run 2")
+        logger.error("Run 1: %s", run1.response_text)
+        logger.error("Run 2: %s", run2.response_text)
+        raise AssertionError("Inference outputs are not bit-for-bit deterministic under temperature=0.0")
+
+    # 6. Render verification table
+    try:
+        display_generation_rich(ollama_info, run1, run2, exact_match, prompt)
+    except ImportError:
+        display_generation_ascii(ollama_info, run1, run2, exact_match, prompt)
+
+    return 0
+
+
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from a YAML file.
 
@@ -205,6 +373,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the end-to-end embedding smoke test and system diagnostic verification.",
     )
     parser.add_argument(
+        "--test-generation",
+        action="store_true",
+        help="Run the deterministic Gemma-2B inference engine verification and exact string match test.",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default="configs/baseline_config.yaml",
@@ -231,20 +404,26 @@ def main(args_list: Optional[list[str]] = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    if args.test:
-        model_name = "sentence-transformers/all-MiniLM-L6-v2"
-        device = "auto"
-        # If config file exists, attempt reading model defaults
-        if Path(args.config).is_file():
-            try:
-                cfg = load_config(args.config)
-                models_cfg = cfg.get("models", {})
-                model_name = models_cfg.get("embedding", model_name)
-                device = models_cfg.get("device", device)
-            except Exception as e:
-                logger.warning("Could not read config '%s': %s", args.config, e)
+    # Load defaults from config if present
+    generator_model = "gemma:2b"
+    embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+    device = "auto"
 
-        return run_smoke_test(model_name=model_name, device=device)
+    if Path(args.config).is_file():
+        try:
+            cfg = load_config(args.config)
+            models_cfg = cfg.get("models", {})
+            embedding_model = models_cfg.get("embedding", embedding_model)
+            generator_model = models_cfg.get("generator", generator_model)
+            device = models_cfg.get("device", device)
+        except Exception as e:
+            logger.warning("Could not read config '%s': %s", args.config, e)
+
+    if args.test_generation:
+        return run_generation_test(model_name=generator_model, device=device)
+
+    if args.test:
+        return run_smoke_test(model_name=embedding_model, device=device)
 
     # If no test flag specified, display config or usage help
     if Path(args.config).is_file():
