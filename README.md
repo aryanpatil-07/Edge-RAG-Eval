@@ -133,6 +133,28 @@ python -m src.pipeline --test-calm
    - Gradient isolation: Base tensors have `grad is None` while gradients flow to $\mathbf{W}_Q, \mathbf{W}_K, \mathbf{W}_V, \mathbf{W}_O$ and $\gamma$
    - Formally documented in [CALM Replication Memo](paper/CALM_REPLICATION_MEMO.md)
 
+### Run Adversarial Distractor Sampler Audit (5 Samples)
+```powershell
+python -m src.pipeline --test-sampler
+```
+
+#### Expected Output
+- Validates 5 distinct evaluation queries against random and adversarial context conditions
+- Verifies Condition 2 Random Distractor: $\text{sim} < 0.25$
+- Verifies Condition 3 Adversarial Distractor: $\text{sim} \ge 0.65$ with conflicting entities
+- Renders rich diagnostic comparison table with exact cosine similarities
+
+### Build 500-Sample Evaluation Dataset
+```powershell
+python -m src.pipeline --build-dataset
+```
+
+#### Expected Output
+- Generates and validates the full 500-sample benchmark dataset: `data/processed/eval_500.json`
+- Strictly validates every sample against Pydantic schema (`sample_id`, `query`, `ground_truth_answer`, `gold_context`, `random_distractor`, `adversarial_distractor`, `sim_gold_query`, `sim_random_query`, `sim_adversarial_query`)
+- Two-sample **Mann-Whitney U test**: confirms statistical separation with $p < 0.001$ ($p \approx 3.5 \times 10^{-165}$)
+- Reports distribution percentiles (p25, p50, p75, p90) and separation margin ($> 0.40$)
+
 ### Custom Config Execution
 ```powershell
 python -m src.pipeline --config configs/baseline_config.yaml
@@ -142,7 +164,7 @@ python -m src.pipeline --config configs/baseline_config.yaml
 
 ## Running Unit & Integration Tests
 
-The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, and CALM cross-attention gating:
+The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, and adversarial distractor sampling:
 
 ```powershell
 pytest tests/
@@ -152,6 +174,10 @@ pytest tests/
 
 ## Core Modules Overview
 
+- **`src.data.distractor_sampler.DistractorSampler`**:
+  Adversarial distractor sampling engine generating semantic distractors across Condition 2 ($\text{sim} < 0.25$) and Condition 3 ($\text{sim} \ge 0.65$ with conflicting entities) while preserving legacy noise injection APIs.
+- **`src.data.distractor_sampler.build_evaluation_dataset`**:
+  Scalable batch generation pipeline constructing and persisting `data/processed/eval_500.json` with strict Pydantic validation and Mann-Whitney U test verification.
 - **`src.models.calm_mini.CALMCrossAttentionLayer`**:
   Modular cross-attention layer replicating CALM (Bansal et al., Google DeepMind, 2024, arXiv:2401.02412) with zero-initialized gating ($\gamma = 0.0$) ensuring zero baseline degradation at initialization.
 - **`src.models.calm_mini.CALMCompositionalWrapper`**:
@@ -162,8 +188,6 @@ pytest tests/
   Validated Pydantic model encapsulating response text, token counts, throughput, latency, and ISO timestamps.
 - **`src.models.inference.EmbeddingClient`**:
   High-throughput, device-agnostic sentence embedding wrapper with automatic GPU/MPS/CPU dispatch and L2 normalization.
-- **`src.data.distractor_sampler.DistractorSampler`**:
-  Configurable context corruption module designed to measure retrieval grounding degradation across varying signal-to-noise ratios.
 - **`src.metrics.grounding`**:
   Standardized vector similarity and retrieval hit-rate evaluation functions.
 

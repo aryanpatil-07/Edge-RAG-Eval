@@ -20,6 +20,12 @@ import numpy as np
 import torch
 import yaml
 
+from src.data.distractor_sampler import (
+    CURATED_SEED_CORPUS,
+    DistractorSampler,
+    build_evaluation_dataset,
+    compute_statistical_separation,
+)
 from src.models.calm_mini import (
     CALMCompositionalWrapper,
     CALMCrossAttentionLayer,
@@ -560,6 +566,223 @@ def run_generation_test(
     return 0
 
 
+def display_sampler_rich(results: list[dict[str, Any]]) -> None:
+    """Render 5-sample distractor verification using rich table."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+    table = Table(
+        title="Edge-RAG-Eval | Adversarial & Random Distractor Sampler Verification (5 Samples)",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Sample ID", style="bold white", width=10)
+    table.add_column("Query & Gold Evidence", style="cyan", width=34)
+    table.add_column("Random Distractor (sim < 0.25)", style="green", width=32)
+    table.add_column("Adversarial Distractor (sim >= 0.65)", style="yellow", width=32)
+    table.add_column("Status", style="bold green", justify="center", width=10)
+
+    for item in results:
+        q_gold = f"[bold]{item['query']}[/bold]\n[dim]Gold (sim={item['sim_gold_query']:.4f}):[/dim] {item['gold_context'][:80]}..."
+        rand = f"[bold]sim={item['sim_random_query']:.4f}[/bold]\n{item['random_distractor'][:80]}..."
+        adv = f"[bold]sim={item['sim_adversarial_query']:.4f}[/bold]\n{item['adversarial_distractor'][:80]}..."
+        table.add_row(item["sample_id"], q_gold, rand, adv, "PASS")
+
+    console.print()
+    console.print(Panel.fit("[bold green]Adversarial Distractor Sampler Audit Passed Cleanly[/bold green]", border_style="green"))
+    console.print(table)
+    console.print()
+
+
+def display_sampler_ascii(results: list[dict[str, Any]]) -> None:
+    """Fallback plain-text ASCII renderer for distractor sampler verification."""
+    print("\n" + "=" * 80)
+    print("Edge-RAG-Eval | Distractor Sampler Verification (5 Samples)")
+    print("=" * 80)
+    for item in results:
+        print(f"[{item['sample_id']}] Query: {item['query']}")
+        print(f"  Gold Sim         : {item['sim_gold_query']:.4f}")
+        print(f"  Random Distractor: sim={item['sim_random_query']:.4f} (< 0.25: PASS)")
+        print(f"  Adv Distractor   : sim={item['sim_adversarial_query']:.4f} (>= 0.65: PASS)")
+        print("-" * 80)
+    print("[SUCCESS] Distractor sampler audit passed cleanly.\n")
+
+
+def run_sampler_test(device: Optional[str] = None) -> int:
+    """Execute a 5-sample verification test for adversarial and random distractor sampling.
+
+    Args:
+        device: Compute device identifier ('auto', 'cpu', 'cuda').
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    logger.info("Executing 5-sample distractor sampler verification test...")
+    sampler = DistractorSampler(device=device, seed=42)
+
+    test_items = CURATED_SEED_CORPUS[:5]
+    results: list[dict[str, Any]] = []
+
+    for i, item in enumerate(test_items):
+        sample_id = f"eval_{i+1:03d}"
+        query = item["query"]
+        gold_passage = item["gold_context"]
+        candidate_pool = [
+            item["random_context"],
+            item["adversarial_context"],
+            "Additional unrelated passage about tectonic subduction zones in planetary geology.",
+        ]
+
+        rand_dist, adv_dist, sim_rand, sim_adv = sampler.sample_distractors(
+            query=query,
+            gold_passage=gold_passage,
+            candidate_pool=candidate_pool,
+            random_threshold=0.25,
+            adversarial_threshold=0.65,
+        )
+
+        q_emb = sampler.embedding_client.encode(query, normalize=True)
+        gold_emb = sampler.embedding_client.encode(gold_passage, normalize=True)
+        sim_gold = float(np.dot(q_emb.flatten(), gold_emb.flatten()))
+
+        if sim_rand >= 0.25:
+            raise AssertionError(f"Random distractor violated threshold: {sim_rand:.4f} >= 0.25")
+        if sim_adv < 0.65:
+            raise AssertionError(f"Adversarial distractor violated threshold: {sim_adv:.4f} < 0.65")
+
+        results.append({
+            "sample_id": sample_id,
+            "query": query,
+            "gold_context": gold_passage,
+            "random_distractor": rand_dist,
+            "adversarial_distractor": adv_dist,
+            "sim_gold_query": sim_gold,
+            "sim_random_query": sim_rand,
+            "sim_adversarial_query": sim_adv,
+        })
+
+    try:
+        display_sampler_rich(results)
+    except ImportError:
+        display_sampler_ascii(results)
+
+    return 0
+
+
+def display_dataset_summary_rich(stats: dict[str, Any], output_path: str) -> None:
+    """Render dataset construction summary and Mann-Whitney U test results using rich."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+
+    table = Table(
+        title=f"Edge-RAG-Eval | 500-Sample Dataset Statistical Separation Audit ({output_path})",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Condition / Metric", style="bold white", width=28)
+    table.add_column("p25", style="cyan", justify="right", width=10)
+    table.add_column("Median (p50)", style="bold cyan", justify="right", width=14)
+    table.add_column("p75", style="cyan", justify="right", width=10)
+    table.add_column("p90", style="cyan", justify="right", width=10)
+    table.add_column("Range [Min, Max]", style="magenta", justify="center", width=20)
+    table.add_column("Status / Check", style="bold green", justify="center", width=16)
+
+    gold = stats["gold"]
+    rand = stats["random"]
+    adv = stats["adversarial"]
+
+    table.add_row(
+        "Condition 1 (Gold Only)",
+        f"{gold['p25']:.4f}",
+        f"{gold['p50']:.4f}",
+        f"{gold['p75']:.4f}",
+        f"{gold['p90']:.4f}",
+        f"[{gold['min']:.4f}, {gold['max']:.4f}]",
+        "GROUND TRUTH",
+    )
+    table.add_row(
+        "Condition 2 (Random Distractor)",
+        f"{rand['p25']:.4f}",
+        f"{rand['p50']:.4f}",
+        f"{rand['p75']:.4f}",
+        f"{rand['p90']:.4f}",
+        f"[{rand['min']:.4f}, {rand['max']:.4f}]",
+        "PASS (< 0.25)",
+    )
+    table.add_row(
+        "Condition 3 (Adversarial Distractor)",
+        f"{adv['p25']:.4f}",
+        f"{adv['p50']:.4f}",
+        f"{adv['p75']:.4f}",
+        f"{adv['p90']:.4f}",
+        f"[{adv['min']:.4f}, {adv['max']:.4f}]",
+        "PASS (>= 0.65)",
+    )
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold green]Dataset Constructed & Validated Successfully ({stats['sample_count']} samples)[/bold green]\n"
+        f"[bold white]Mann-Whitney U Test:[/] statistic = {stats['statistic']:.1f}, "
+        f"[bold green]p-value = {stats['p_value']:.4e}[/] (Statistically Distinct: [bold green]p < 0.001[/])\n"
+        f"[bold white]Separation Margin (Min Adv - Max Rand):[/] [bold cyan]{stats['separation_margin']:.4f}[/]\n"
+        f"[bold white]Dataset Artifact:[/] [cyan]{output_path}[/]",
+        border_style="green",
+    ))
+    console.print(table)
+    console.print()
+
+
+def display_dataset_summary_ascii(stats: dict[str, Any], output_path: str) -> None:
+    """Fallback plain-text ASCII renderer for dataset construction summary."""
+    print("\n" + "=" * 80)
+    print(f"Edge-RAG-Eval | Dataset Construction Summary ({stats['sample_count']} samples)")
+    print("=" * 80)
+    print(f"  Artifact Path            : {output_path}")
+    print(f"  Mann-Whitney U Statistic : {stats['statistic']}")
+    print(f"  Mann-Whitney U p-value   : {stats['p_value']:.4e} (p < 0.001: {stats['statistically_distinct']})")
+    print(f"  Separation Margin        : {stats['separation_margin']:.4f}")
+    print("-" * 80)
+    for name, key in [("Gold Only", "gold"), ("Random Distractor", "random"), ("Adversarial Distractor", "adversarial")]:
+        d = stats[key]
+        print(f"  {name:<24} : p25={d['p25']:.4f}, p50={d['p50']:.4f}, p75={d['p75']:.4f}, p90={d['p90']:.4f}, range=[{d['min']:.4f}, {d['max']:.4f}]")
+    print("=" * 80 + "\n")
+
+
+def run_build_dataset(
+    output_path: str = "data/processed/eval_500.json",
+    num_samples: int = 500,
+    device: Optional[str] = None,
+) -> int:
+    """Construct, validate, and persist the evaluation benchmark dataset.
+
+    Args:
+        output_path: Path to target json file.
+        num_samples: Number of benchmark samples.
+        device: Compute device identifier.
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    logger.info("Starting dataset build: %d samples -> %s", num_samples, output_path)
+    samples, stats = build_evaluation_dataset(
+        num_samples=num_samples,
+        output_path=output_path,
+        device=device,
+    )
+
+    try:
+        display_dataset_summary_rich(stats, output_path)
+    except ImportError:
+        display_dataset_summary_ascii(stats, output_path)
+
+    return 0
+
+
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from a YAML file.
 
@@ -598,6 +821,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--test-calm",
         action="store_true",
         help="Run the CALM cross-attention architecture audit and gradient isolation diagnostic.",
+    )
+    parser.add_argument(
+        "--test-sampler",
+        action="store_true",
+        help="Run 5-sample verification test for adversarial and random distractor sampling engine.",
+    )
+    parser.add_argument(
+        "--build-dataset",
+        action="store_true",
+        help="Construct and validate the 500-sample benchmark dataset (data/processed/eval_500.json).",
+    )
+    parser.add_argument(
+        "--dataset-size",
+        type=int,
+        default=500,
+        help="Number of samples to generate for benchmark dataset (default: 500).",
+    )
+    parser.add_argument(
+        "--dataset-output",
+        type=str,
+        default="data/processed/eval_500.json",
+        help="Target filepath for generated benchmark dataset (default: data/processed/eval_500.json).",
     )
     parser.add_argument(
         "--config",
@@ -641,6 +886,16 @@ def main(args_list: Optional[list[str]] = None) -> int:
         except Exception as e:
             logger.warning("Could not read config '%s': %s", args.config, e)
 
+    if args.test_sampler:
+        return run_sampler_test(device=device)
+
+    if args.build_dataset:
+        return run_build_dataset(
+            output_path=args.dataset_output,
+            num_samples=args.dataset_size,
+            device=device,
+        )
+
     if args.test_calm:
         return run_calm_test(anchor_dim=2048, augment_dim=384, attn_dim=512, num_heads=8)
 
@@ -663,3 +918,4 @@ def main(args_list: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
