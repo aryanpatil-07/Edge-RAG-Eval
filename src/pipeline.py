@@ -3,6 +3,7 @@
 Usage:
     python -m src.pipeline --test
     python -m src.pipeline --test-generation
+    python -m src.pipeline --test-calm
     python -m src.pipeline --config configs/baseline_config.yaml
 """
 
@@ -19,6 +20,10 @@ import numpy as np
 import torch
 import yaml
 
+from src.models.calm_mini import (
+    CALMCompositionalWrapper,
+    CALMCrossAttentionLayer,
+)
 from src.models.inference import (
     EmbeddingClient,
     GemmaInferenceClient,
@@ -204,6 +209,218 @@ def display_generation_ascii(
     print("=" * 70 + "\n")
 
 
+def display_calm_rich(results: Dict[str, Any]) -> None:
+    """Render CALM cross-attention architecture audit and parameter tables."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+
+    # Panel header
+    header_text = (
+        "[bold cyan]CALM Architecture Audit & Cross-Attention Blueprint[/bold cyan]\n"
+        "[white]Replicating Bansal et al., Google DeepMind India (arXiv:2401.02412)[/white]\n"
+        "[green]Freeze Anchor Model (Gemma-2B) + Gated Cross-Attention (MiniLM)[/green]"
+    )
+    console.print()
+    console.print(Panel.fit(header_text, border_style="cyan"))
+    console.print()
+
+    # Table 1: Blueprint & Parameter Budget Table
+    param_table = Table(
+        title="CALM Blueprint | Parameter Efficiency & Budget Audit",
+        show_header=True,
+        header_style="bold magenta",
+    )
+    param_table.add_column("Architecture Attribute", style="bold white", width=30)
+    param_table.add_column("Configured Value", style="cyan", width=22)
+    param_table.add_column("Evaluation / Budget", style="bold green", justify="center", width=22)
+
+    param_table.add_row("Anchor Hidden Dimension (Gemma-2B)", str(results["anchor_dim"]), "FROZEN (2048)")
+    param_table.add_row("Augment Dimension (MiniLM)", str(results["augment_dim"]), "CONTEXT (384)")
+    param_table.add_row("Cross-Attention Dimension", str(results["attn_dim"]), f"{results['num_heads']} heads x 64")
+    param_table.add_row("Base Anchor Model Parameters", f"{results['frozen_parameters']:,}", "FROZEN (0.0% trained)")
+    param_table.add_row("Trainable Adapter Parameters", f"{results['trainable_parameters']:,}", "PASS (<5.0M Budget)")
+    param_table.add_row("Trainable Capacity Fraction", f"{results['trainable_percentage']:.3f}%", "PASS (<1.0% Ratio)")
+    param_table.add_row("Learned Gating Scalar (gamma)", f"{results['gamma_value']:.4f}", "INIT EXACT (0.0)")
+
+    console.print(param_table)
+    console.print()
+
+    # Table 2: Functional Diagnostic Verification Table
+    diag_table = Table(
+        title="CALM Diagnostic | Functional & Gradient Flow Verification",
+        show_header=True,
+        header_style="bold green",
+    )
+    diag_table.add_column("Diagnostic Check", style="bold white", width=34)
+    diag_table.add_column("Observed Output / Behavior", style="cyan", width=26)
+    diag_table.add_column("Status", style="bold green", justify="center", width=14)
+
+    diag_table.add_row("Anchor Input Tensor Shape", str(results["anchor_shape"]), "PASS")
+    diag_table.add_row("Augment Input Tensor Shape", str(results["augment_shape"]), "PASS")
+    diag_table.add_row("Output Tensor Dimension", str(results["output_shape"]), "VERIFIED")
+    diag_table.add_row("Zero Degradation at Init (gamma=0)", "torch.equal(out, anchor)", "PASS")
+    diag_table.add_row("Base Anchor Tensor Gradient", "grad is None (Frozen)", "ISOLATED")
+    diag_table.add_row("Augment Input Tensor Gradient", "grad is None (Frozen)", "ISOLATED")
+    diag_table.add_row("Gating Factor (gamma) Gradient", "grad computed (Active)", "FLOWING")
+    diag_table.add_row("Adapter Projections Gradient", "W_Q, W_K, W_V, W_O active", "TRAINABLE")
+
+    console.print(diag_table)
+    console.print()
+
+
+def display_calm_ascii(results: Dict[str, Any]) -> None:
+    """Fallback plain-text ASCII renderer for CALM architecture audit."""
+    print("\n" + "=" * 70)
+    print("Edge-RAG-Eval | CALM Architecture Audit & Diagnostic")
+    print("Reference: Bansal et al., Google DeepMind (arXiv:2401.02412)")
+    print("=" * 70)
+    print(f"  Anchor Dimension (Gemma-2B)  : {results['anchor_dim']}")
+    print(f"  Augment Dimension (MiniLM)   : {results['augment_dim']}")
+    print(f"  Cross-Attention Dimension    : {results['attn_dim']} ({results['num_heads']} heads)")
+    print(f"  Base Frozen Parameters       : {results['frozen_parameters']:,}")
+    print(f"  Trainable Adapter Parameters : {results['trainable_parameters']:,} (<5M: {results['is_under_5m']})")
+    print(f"  Trainable Fraction           : {results['trainable_percentage']:.3f}% (<1%: {results['is_under_1_percent']})")
+    print(f"  Gating Factor (gamma)        : {results['gamma_value']:.4f}")
+    print("-" * 70)
+    print(f"  Anchor Input Shape           : {results['anchor_shape']}")
+    print(f"  Augment Input Shape          : {results['augment_shape']}")
+    print(f"  Output Tensor Shape          : {results['output_shape']}")
+    print(f"  Zero Init Equivalence        : {results['init_exact']}")
+    print(f"  Base Tensor Gradient Status  : grad is None (Frozen: True)")
+    print(f"  Adapter Gradient Status      : Active (Flowing: True)")
+    print("=" * 70)
+    print("[SUCCESS] CALM modular cross-attention audit passed cleanly (Exit code 0)\n")
+
+
+def run_calm_test(
+    anchor_dim: int = 2048,
+    augment_dim: int = 384,
+    attn_dim: int = 512,
+    num_heads: int = 8,
+) -> int:
+    """Execute architectural audit and gradient isolation diagnostic for CALM.
+
+    Args:
+        anchor_dim: Anchor model dimension (default: 2048 for Gemma-2B).
+        augment_dim: Augment context dimension (default: 384 for MiniLM).
+        attn_dim: Cross-attention projection dimension (default: 512).
+        num_heads: Number of attention heads (default: 8).
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    logger.info("Executing CALM cross-attention architecture audit...")
+
+    # 1. Instantiate CALM layer and compositional wrapper
+    layer = CALMCrossAttentionLayer(
+        anchor_dim=anchor_dim,
+        augment_dim=augment_dim,
+        attn_dim=attn_dim,
+        num_heads=num_heads,
+    )
+    wrapper = CALMCompositionalWrapper(
+        anchor_dim=anchor_dim,
+        augment_dim=augment_dim,
+        attn_dim=attn_dim,
+        num_heads=num_heads,
+    )
+
+    # 2. Generate dummy tensors
+    batch_size = 2
+    seq_len = 16
+    ctx_len = 32
+
+    anchor_hidden_states = torch.randn(batch_size, seq_len, anchor_dim, requires_grad=False)
+    augment_hidden_states = torch.randn(batch_size, ctx_len, augment_dim, requires_grad=False)
+
+    # 3. Forward pass verification
+    out = layer(anchor_hidden_states, augment_hidden_states)
+    expected_shape = (batch_size, seq_len, anchor_dim)
+    if out.shape != expected_shape:
+        raise ValueError(f"Output shape mismatch: expected {expected_shape}, got {out.shape}")
+
+    # Check zero-init exact equivalence (gamma = 0.0)
+    init_exact = torch.equal(out, anchor_hidden_states)
+    if not init_exact:
+        raise AssertionError("Output must be exactly identical to anchor hidden states at gamma=0.0")
+
+    # 4. Parameter breakdown and budget verification
+    breakdown = wrapper.get_parameter_breakdown()
+    trainable_params = layer.trainable_parameters
+    if trainable_params >= 5_000_000:
+        raise AssertionError(f"Trainable parameters ({trainable_params}) must be < 5M")
+    if not breakdown["is_under_1_percent"]:
+        raise AssertionError(f"Trainable percentage ({breakdown['trainable_percentage']:.2f}%) must be < 1%")
+
+    # 5. Backward gradient isolation check
+    # Check 1: Base inputs do not require grad and retain grad is None
+    loss_init = out.sum()
+    loss_init.backward()
+
+    gamma_has_grad = layer.gamma.grad is not None
+    anchor_frozen = anchor_hidden_states.grad is None
+    augment_frozen = augment_hidden_states.grad is None
+
+    if not anchor_frozen or not augment_frozen:
+        raise AssertionError("Base tensors must remain frozen with grad is None")
+    if not gamma_has_grad:
+        raise AssertionError("Gating scalar gamma must receive gradients")
+
+    # Check 2: When gamma > 0, gradients flow to cross-attention projection matrices
+    with torch.no_grad():
+        layer.gamma.data.fill_(1.0)
+    layer.zero_grad()
+
+    out_active = layer(anchor_hidden_states, augment_hidden_states)
+    loss_active = out_active.sum()
+    loss_active.backward()
+
+    adapter_gradients_active = (
+        layer.q_proj.weight.grad is not None
+        and layer.k_proj.weight.grad is not None
+        and layer.v_proj.weight.grad is not None
+        and layer.out_proj.weight.grad is not None
+        and layer.gamma.grad is not None
+        and anchor_hidden_states.grad is None
+    )
+
+    if not adapter_gradients_active:
+        raise AssertionError("Cross-attention adapter projections must receive gradients during backward pass")
+
+    # Reset gamma to 0.0
+    with torch.no_grad():
+        layer.gamma.data.fill_(0.0)
+    layer.zero_grad()
+
+    results: Dict[str, Any] = {
+        "anchor_dim": anchor_dim,
+        "augment_dim": augment_dim,
+        "attn_dim": attn_dim,
+        "num_heads": num_heads,
+        "total_parameters": breakdown["total_parameters"],
+        "trainable_parameters": trainable_params,
+        "frozen_parameters": breakdown["frozen_parameters"],
+        "trainable_percentage": breakdown["trainable_percentage"],
+        "is_under_1_percent": breakdown["is_under_1_percent"],
+        "is_under_5m": breakdown["is_under_5m"],
+        "gamma_value": breakdown["gamma_value"],
+        "anchor_shape": tuple(anchor_hidden_states.shape),
+        "augment_shape": tuple(augment_hidden_states.shape),
+        "output_shape": tuple(out.shape),
+        "init_exact": init_exact,
+    }
+
+    try:
+        display_calm_rich(results)
+    except ImportError:
+        display_calm_ascii(results)
+
+    return 0
+
+
 def run_smoke_test(
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
     device: Optional[str] = None,
@@ -378,6 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the deterministic Gemma-2B inference engine verification and exact string match test.",
     )
     parser.add_argument(
+        "--test-calm",
+        action="store_true",
+        help="Run the CALM cross-attention architecture audit and gradient isolation diagnostic.",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default="configs/baseline_config.yaml",
@@ -418,6 +640,9 @@ def main(args_list: Optional[list[str]] = None) -> int:
             device = models_cfg.get("device", device)
         except Exception as e:
             logger.warning("Could not read config '%s': %s", args.config, e)
+
+    if args.test_calm:
+        return run_calm_test(anchor_dim=2048, augment_dim=384, attn_dim=512, num_heads=8)
 
     if args.test_generation:
         return run_generation_test(model_name=generator_model, device=device)

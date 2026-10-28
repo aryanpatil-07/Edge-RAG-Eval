@@ -1,6 +1,10 @@
 """Model architectures and inference clients for Edge-RAG-Eval."""
 
-from src.models.calm_mini import CALMMiniCrossAttention
+from src.models.calm_mini import (
+    CALMCompositionalWrapper,
+    CALMCrossAttentionLayer,
+    CALMMiniCrossAttention,
+)
 from src.models.inference import (
     EmbeddingClient,
     GenerationResult,
@@ -15,5 +19,7 @@ __all__ = [
     "GenerationResult",
     "check_ollama",
     "detect_device",
+    "CALMCrossAttentionLayer",
+    "CALMCompositionalWrapper",
     "CALMMiniCrossAttention",
 ]

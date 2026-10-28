@@ -112,6 +112,27 @@ python -m src.pipeline --test-generation
    - Verifies 100% bit-for-bit exact string equivalence (`Pass: Determinism Verified`)
    - Logs tokens generated, throughput (tokens/sec), and latency in a clean `rich` table
 
+### Run CALM Modular Cross-Attention Architecture Audit
+```powershell
+python -m src.pipeline --test-calm
+```
+
+#### Expected Output
+1. **Parameter Efficiency & Budget Audit**:
+   - Anchor hidden dimension: `2048` (Gemma-2B, frozen)
+   - Augment dimension: `384` (`sentence-transformers/all-MiniLM-L6-v2`)
+   - Cross-attention projection dimension: `512` (8 heads $\times$ 64)
+   - Base model parameters: `2,000,000,000` (frozen, 0% trained)
+   - Trainable adapter parameters: `2,490,369` (passes $<5\text{M}$ budget)
+   - Trainable capacity fraction: `0.124%` (passes $<1.0\%$ budget)
+   - Learned gating scalar ($\gamma$): Initialized strictly to `0.0000`
+2. **Functional & Gradient Flow Verification**:
+   - Anchor shape `(2, 16, 2048)` and augment shape `(2, 32, 384)`
+   - Output shape verified as `(2, 16, 2048)`
+   - Zero degradation at init: `torch.equal(out, anchor)` passes
+   - Gradient isolation: Base tensors have `grad is None` while gradients flow to $\mathbf{W}_Q, \mathbf{W}_K, \mathbf{W}_V, \mathbf{W}_O$ and $\gamma$
+   - Formally documented in [CALM Replication Memo](paper/CALM_REPLICATION_MEMO.md)
+
 ### Custom Config Execution
 ```powershell
 python -m src.pipeline --config configs/baseline_config.yaml
@@ -121,7 +142,7 @@ python -m src.pipeline --config configs/baseline_config.yaml
 
 ## Running Unit & Integration Tests
 
-The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, and deterministic generation:
+The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, and CALM cross-attention gating:
 
 ```powershell
 pytest tests/
@@ -131,14 +152,16 @@ pytest tests/
 
 ## Core Modules Overview
 
+- **`src.models.calm_mini.CALMCrossAttentionLayer`**:
+  Modular cross-attention layer replicating CALM (Bansal et al., Google DeepMind, 2024, arXiv:2401.02412) with zero-initialized gating ($\gamma = 0.0$) ensuring zero baseline degradation at initialization.
+- **`src.models.calm_mini.CALMCompositionalWrapper`**:
+  Compositional container integrating frozen base LLM representations with trainable cross-attention adapters and parameter audit tools.
 - **`src.models.inference.GemmaInferenceClient`**:
   Deterministic text generation engine wrapping Ollama REST API and Hugging Face pipelines with explicit context budgeting and reproducible decoding (`temperature=0.0`, `seed=42`).
 - **`src.models.inference.GenerationResult`**:
   Validated Pydantic model encapsulating response text, token counts, throughput, latency, and ISO timestamps.
 - **`src.models.inference.EmbeddingClient`**:
   High-throughput, device-agnostic sentence embedding wrapper with automatic GPU/MPS/CPU dispatch and L2 normalization.
-- **`src.models.calm_mini.CALMMiniCrossAttention`**:
-  Lightweight cross-attention adapter enabling modular composition between edge retrieval anchors and compact foundation models (e.g., Gemma-2B).
 - **`src.data.distractor_sampler.DistractorSampler`**:
   Configurable context corruption module designed to measure retrieval grounding degradation across varying signal-to-noise ratios.
 - **`src.metrics.grounding`**:
