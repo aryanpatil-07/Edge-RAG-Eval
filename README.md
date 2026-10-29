@@ -166,6 +166,16 @@ python -m src.pipeline --test-oss-adapter
 - Reports Exact Match (EM), Token F1, Grounding Score, Entity Misattribution rate, and Calibrated Abstention rate with 95% bootstrap confidence intervals
 - Formally documented in [Google DeepMind OSS Audit & Evaluator Design](docs/DEEPMIND_OSS_AUDIT.md)
 
+### Run Grounding Metrics & Entity Misattribution Diagnostic
+```powershell
+python -m src.pipeline --test-metrics
+```
+
+#### Expected Output
+- Evaluates 4 deterministic synthetic cases: Perfect Answer (EM=1.0, F1=1.0), Partial Match (EM=0.0, F1~0.67), Distractor Poisoned (Misattribution=True, Leaked Entities flagged), and Valid Abstention (Abstention=True).
+- Computes string normalization, Exact Match (EM), token-level F1, content token grounding score, and composite grounding score.
+- Displays rich evaluation matrix table with pass/fail verification flags.
+
 ### Custom Config Execution
 ```powershell
 python -m src.pipeline --config configs/baseline_config.yaml
@@ -175,7 +185,7 @@ python -m src.pipeline --config configs/baseline_config.yaml
 
 ## Running Unit & Integration Tests
 
-The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, adversarial distractor sampling, and DeepMind OSS adapter interfaces:
+The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, adversarial distractor sampling, DeepMind OSS adapter interfaces, and grounding metrics:
 
 ```powershell
 pytest tests/
@@ -202,7 +212,7 @@ pytest tests/
 - **`src.models.inference.EmbeddingClient`**:
   High-throughput, device-agnostic sentence embedding wrapper with automatic GPU/MPS/CPU dispatch and L2 normalization.
 - **`src.metrics.grounding`**:
-  Standardized vector similarity and retrieval hit-rate evaluation functions.
+  High-performance metric scoring library computing string normalization, Exact Match (EM), token-level F1, entity misattribution detection, standardized abstention classification, and composite grounding metrics (`GroundingMetrics`).
 
 ---
 

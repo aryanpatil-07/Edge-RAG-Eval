@@ -27,6 +27,15 @@ from src.data.distractor_sampler import (
     build_evaluation_dataset,
     compute_statistical_separation,
 )
+from src.metrics.grounding import (
+    GroundingMetrics,
+    compute_exact_match,
+    compute_grounding_score,
+    compute_token_f1,
+    detect_abstention,
+    detect_entity_misattribution,
+    evaluate_grounding,
+)
 from src.metrics.oss_adapter import (
     ContextNoiseEvaluator,
     EvaluationInput,
@@ -980,6 +989,140 @@ def run_oss_adapter_test(dataset_path: str = "data/processed/eval_500.json") -> 
     return 0
 
 
+def display_metrics_rich(case_results: list[dict[str, Any]]) -> None:
+    """Render grounding metrics evaluation table using rich styling."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+
+    table = Table(
+        title="Edge-RAG-Eval | Grounding Metrics & Entity Misattribution Diagnostic Audit",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Case", style="bold white", width=10)
+    table.add_column("Condition / Scenario", style="bold yellow", width=22)
+    table.add_column("Prediction Snippet", style="white", width=30)
+    table.add_column("EM", justify="center", width=6)
+    table.add_column("F1", justify="center", width=8)
+    table.add_column("Grounding", justify="center", width=10)
+    table.add_column("Misattribution", justify="center", width=15)
+    table.add_column("Leaked Entities", style="magenta", justify="center", width=20)
+    table.add_column("Abstention", justify="center", width=12)
+    table.add_column("Composite", justify="center", width=10)
+    table.add_column("Status", justify="center", width=10)
+
+    for r in case_results:
+        em_str = "[bold green]1.0[/bold green]" if r["exact_match"] == 1.0 else "[dim]0.0[/dim]"
+        misattr_str = "[bold red]DETECTED[/bold red]" if r["misattribution"] else "[dim]False[/dim]"
+        abstain_str = "[bold blue]REFUSAL[/bold blue]" if r["abstention"] else "[dim]False[/dim]"
+        leaked_str = ", ".join(r["leaked_entities"]) if r["leaked_entities"] else "[dim]None[/dim]"
+        status_str = "[bold green]PASSED[/bold green]" if r["passed"] else "[bold red]FAILED[/bold red]"
+
+        table.add_row(
+            r["case_id"],
+            r["scenario"],
+            r["prediction"][:28] + ("..." if len(r["prediction"]) > 28 else ""),
+            em_str,
+            f"{r['token_f1']:.2f}",
+            f"{r['grounding_score']:.2f}",
+            misattr_str,
+            leaked_str,
+            abstain_str,
+            f"{r['composite_grounding_score']:.2f}",
+            status_str,
+        )
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold green]Grounding Metrics Engine & Entity Misattribution Scorer Verified[/bold green]\n"
+        f"[bold white]Engine Protocol:[/] [cyan]evaluate_grounding(prediction, ground_truth, gold, distractor) -> GroundingMetrics[/cyan]\n"
+        f"[bold white]Deterministic Cases Tested:[/] 4/4 synthetic scenarios passed\n"
+        f"[bold white]Core Accuracy:[/] Exact Match (EM) & Token F1 harmonic scoring validated\n"
+        f"[bold white]Entity Misattribution:[/] Distinctive distractor leakage isolation verified\n"
+        f"[bold white]Model Abstention:[/] Standardized refusal/uncertainty detection verified",
+        border_style="green",
+    ))
+    console.print(table)
+    console.print()
+
+
+def display_metrics_ascii(case_results: list[dict[str, Any]]) -> None:
+    """Fallback plain-text ASCII renderer for metrics verification."""
+    print("\n" + "=" * 80)
+    print("Edge-RAG-Eval | Grounding Metrics & Entity Misattribution Verification")
+    print("=" * 80)
+    for r in case_results:
+        print(f"[{r['case_id']}] {r['scenario']}")
+        print(f"  Prediction     : {r['prediction']}")
+        print(f"  EM: {r['exact_match']:.1f} | F1: {r['token_f1']:.2f} | Grounding: {r['grounding_score']:.2f} | Composite: {r['composite_grounding_score']:.2f}")
+        print(f"  Misattribution : {r['misattribution']} (Leaked: {r['leaked_entities']}) | Abstention: {r['abstention']}")
+        print(f"  Status         : {'PASSED' if r['passed'] else 'FAILED'}")
+        print("-" * 80)
+    print("[SUCCESS] All 4 grounding metric verification cases passed cleanly.\n")
+
+
+def run_metrics_test() -> int:
+    """Run deterministic grounding metrics test suite across 4 synthetic cases.
+
+    Returns:
+        int: 0 on success.
+    """
+    logger.info("Executing Grounding Metrics & Entity Misattribution Scorer verification...")
+
+    # Case 1: Perfect Answer
+    c1_gold = "The Apollo 11 mission was commanded by Neil Armstrong and landed on the Moon in July 1969."
+    c1_dist = "The Apollo 11 mission was commanded by Alan Shepard and landed on the Moon in October 1971."
+    c1_gt = "Neil Armstrong"
+    c1_pred = "Neil Armstrong"
+    res1 = evaluate_grounding(c1_pred, c1_gt, c1_gold, c1_dist)
+    if res1.exact_match != 1.0 or res1.token_f1 != 1.0 or res1.misattribution or res1.abstention:
+        raise AssertionError(f"Case 1 (Perfect Answer) failed validation: {res1}")
+
+    # Case 2: Partial Match
+    c2_gold = "Superconductors exhibit zero electrical resistance at low temperatures below the critical threshold."
+    c2_dist = "Semiconductors display variable conductivity dependent on thermal dopant concentration."
+    c2_gt = "Superconductors exhibit zero electrical resistance at low temperatures"
+    c2_pred = "Superconductors exhibit zero electrical resistance under pressure"
+    res2 = evaluate_grounding(c2_pred, c2_gt, c2_gold, c2_dist)
+    if res2.exact_match != 0.0 or not (0.60 <= res2.token_f1 <= 0.75) or res2.misattribution or res2.abstention:
+        raise AssertionError(f"Case 2 (Partial Match) failed validation: {res2}")
+
+    # Case 3: Distractor Poisoned
+    c3_gold = "The Apollo 11 mission was commanded by Neil Armstrong and landed in 1969."
+    c3_dist = "The Apollo 11 mission was commanded by Alan Shepard and landed in 1971."
+    c3_gt = "Neil Armstrong"
+    c3_pred = "The Apollo 11 mission was commanded by Alan Shepard in 1971."
+    res3 = evaluate_grounding(c3_pred, c3_gt, c3_gold, c3_dist)
+    if res3.exact_match != 0.0 or not res3.misattribution or not res3.leaked_entities or res3.abstention:
+        raise AssertionError(f"Case 3 (Distractor Poisoned) failed validation: {res3}")
+
+    # Case 4: Valid Abstention
+    c4_gold = "Alexander Fleming discovered penicillin at St. Mary's Hospital in London."
+    c4_dist = "Howard Florey discovered penicillin at Oxford University."
+    c4_gt = "Alexander Fleming"
+    c4_pred = "The provided context contains conflicting facts and cannot be determined."
+    res4 = evaluate_grounding(c4_pred, c4_gt, c4_gold, c4_dist)
+    if not res4.abstention or res4.misattribution or res4.exact_match != 0.0:
+        raise AssertionError(f"Case 4 (Valid Abstention) failed validation: {res4}")
+
+    case_results = [
+        {"case_id": "Case 1", "scenario": "Perfect Answer", "prediction": c1_pred, "passed": True, **res1.model_dump()},
+        {"case_id": "Case 2", "scenario": "Partial Match", "prediction": c2_pred, "passed": True, **res2.model_dump()},
+        {"case_id": "Case 3", "scenario": "Distractor Poisoned", "prediction": c3_pred, "passed": True, **res3.model_dump()},
+        {"case_id": "Case 4", "scenario": "Valid Abstention", "prediction": c4_pred, "passed": True, **res4.model_dump()},
+    ]
+
+    try:
+        display_metrics_rich(case_results)
+    except ImportError:
+        display_metrics_ascii(case_results)
+
+    return 0
+
+
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from a YAML file.
 
@@ -1035,6 +1178,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run Google DeepMind proeval / lighteval adapter diagnostic verification test.",
     )
     parser.add_argument(
+        "--test-metrics",
+        action="store_true",
+        help="Run deterministic grounding metrics and entity misattribution diagnostic test.",
+    )
+    parser.add_argument(
         "--dataset-size",
         type=int,
         default=500,
@@ -1087,6 +1235,9 @@ def main(args_list: Optional[list[str]] = None) -> int:
             device = models_cfg.get("device", device)
         except Exception as e:
             logger.warning("Could not read config '%s': %s", args.config, e)
+
+    if args.test_metrics:
+        return run_metrics_test()
 
     if args.test_oss_adapter:
         return run_oss_adapter_test()

@@ -18,45 +18,17 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Standard stopword set for content-token isolation and grounding evaluation
-STOPWORDS: Set[str] = {
-    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-    "aren't", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both",
-    "but", "by", "can't", "cannot", "could", "couldn't", "did", "didn't", "do", "does", "doesn't",
-    "doing", "don't", "down", "during", "each", "few", "for", "from", "further", "had", "hadn't",
-    "has", "hasn't", "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here",
-    "here's", "hers", "herself", "him", "himself", "his", "how", "how's", "i", "i'd", "i'll",
-    "i'm", "i've", "if", "in", "into", "is", "isn't", "it", "it's", "its", "itself", "let's",
-    "me", "more", "most", "mustn't", "my", "myself", "no", "nor", "not", "of", "off", "on",
-    "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own",
-    "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some",
-    "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then",
-    "there", "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this",
-    "those", "through", "to", "too", "under", "until", "up", "very", "was", "wasn't", "we",
-    "we'd", "we'll", "we're", "we've", "were", "weren't", "what", "what's", "when", "when's",
-    "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with",
-    "won't", "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours",
-    "yourself", "yourselves",
-}
-
-# Standardized refusal and abstention phrases
-ABSTENTION_MARKERS: Sequence[str] = (
-    "insufficient context",
-    "cannot be determined",
-    "not enough information",
-    "information is not provided",
-    "not mentioned in the text",
-    "unable to answer",
-    "i do not know",
-    "i don't know",
-    "does not provide",
-    "cannot answer",
-    "no information",
-    "context does not mention",
-    "unanswerable",
-    "conflicting reports",
-    "not stated in the context",
-    "insufficient information",
+from src.metrics.grounding import (
+    ABSTENTION_MARKERS,
+    STOPWORDS,
+    compute_exact_match,
+    compute_grounding_score,
+    compute_token_f1,
+    detect_abstention,
+    detect_entity_misattribution as detect_entity_misattribution_grounding,
+    extract_distinctive_distractor_entities,
+    get_tokens,
+    normalize_text,
 )
 
 
@@ -116,150 +88,8 @@ class MetricResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Text Normalization & Metric Utilities
+# Metric Utilities (Delegated to src.metrics.grounding)
 # ---------------------------------------------------------------------------
-
-def normalize_text(text: str) -> str:
-    """Normalize text by lowercasing, removing punctuation, and stripping articles.
-
-    Args:
-        text: Input string.
-
-    Returns:
-        str: Normalized text string.
-    """
-    text = text.lower()
-    # Remove punctuation
-    text = "".join(ch for ch in text if ch not in string.punctuation)
-    # Remove articles
-    text = re.sub(r"\b(a|an|the)\b", " ", text)
-    # Normalize whitespace
-    return " ".join(text.split())
-
-
-def get_tokens(text: str) -> List[str]:
-    """Tokenize normalized text into a list of whitespace-separated tokens.
-
-    Args:
-        text: Input string.
-
-    Returns:
-        List[str]: List of unigram tokens.
-    """
-    return normalize_text(text).split()
-
-
-def compute_exact_match(prediction: str, ground_truth: str) -> float:
-    """Compute binary exact match (EM) between prediction and ground-truth strings.
-
-    Args:
-        prediction: Model generated output text.
-        ground_truth: True reference answer.
-
-    Returns:
-        float: 1.0 if normalized strings match exactly, else 0.0.
-    """
-    norm_pred = normalize_text(prediction)
-    norm_gt = normalize_text(ground_truth)
-    if not norm_gt:
-        return 1.0 if not norm_pred else 0.0
-    return 1.0 if norm_pred == norm_gt else 0.0
-
-
-def compute_token_f1(prediction: str, ground_truth: str) -> float:
-    """Compute token-level precision, recall, and F1 score against ground truth.
-
-    Args:
-        prediction: Model generated output text.
-        ground_truth: True reference answer.
-
-    Returns:
-        float: Token F1 score in range [0.0, 1.0].
-    """
-    pred_tokens = get_tokens(prediction)
-    gt_tokens = get_tokens(ground_truth)
-
-    if not pred_tokens and not gt_tokens:
-        return 1.0
-    if not pred_tokens or not gt_tokens:
-        return 0.0
-
-    common = collections.Counter(pred_tokens) & collections.Counter(gt_tokens)
-    num_same = sum(common.values())
-
-    if num_same == 0:
-        return 0.0
-
-    precision = 1.0 * num_same / len(pred_tokens)
-    recall = 1.0 * num_same / len(gt_tokens)
-    f1 = (2 * precision * recall) / (precision + recall)
-    return float(f1)
-
-
-def compute_grounding_score(response: str, context: str) -> float:
-    """Compute content token overlap between model response and context.
-
-    Args:
-        response: Model generated response.
-        context: Context provided to the model.
-
-    Returns:
-        float: Fraction of content tokens in response present in context [0.0, 1.0].
-    """
-    resp_tokens = [w for w in get_tokens(response) if w not in STOPWORDS and len(w) > 1]
-    if not resp_tokens:
-        return 1.0
-
-    ctx_tokens = set(get_tokens(context))
-    grounded_count = sum(1 for w in resp_tokens if w in ctx_tokens)
-    return float(grounded_count / len(resp_tokens))
-
-
-def detect_abstention(response: str) -> bool:
-    """Detect whether model response indicates principled abstention or refusal.
-
-    Args:
-        response: Model response string.
-
-    Returns:
-        bool: True if response contains explicit refusal/abstention markers.
-    """
-    norm = response.lower()
-    return any(marker in norm for marker in ABSTENTION_MARKERS)
-
-
-def extract_distinctive_distractor_entities(
-    distractor_context: str,
-    gold_context: str,
-    ground_truth: str,
-) -> Set[str]:
-    """Extract entity tokens present in the distractor but absent from gold context and ground truth.
-
-    Args:
-        distractor_context: Adversarial or noisy passage.
-        gold_context: Ground-truth reference passage.
-        ground_truth: Target answer text.
-
-    Returns:
-        Set[str]: Distinctive distractor entity tokens.
-    """
-    def tokenize_content(txt: str) -> Set[str]:
-        cleaned = re.sub(r"[^\w\s]", " ", txt.lower())
-        return {w for w in cleaned.split() if w and w not in STOPWORDS and len(w) > 2}
-
-    # If distractor_context is concatenated within gold_context, isolate the true gold passage
-    clean_gold = gold_context
-    if distractor_context and distractor_context in gold_context:
-        isolated = gold_context.replace(distractor_context, "").strip()
-        if isolated:
-            clean_gold = isolated
-
-    dist_tokens = tokenize_content(distractor_context)
-    gold_tokens = tokenize_content(clean_gold)
-    gt_tokens = tokenize_content(ground_truth)
-
-    return dist_tokens - (gold_tokens | gt_tokens)
-
 
 def detect_entity_misattribution(
     response: str,
@@ -289,19 +119,13 @@ def detect_entity_misattribution(
     if detect_abstention(response):
         return False
 
-    distinctive_entities = extract_distinctive_distractor_entities(
-        distractor_context=distractor_context,
+    misattr, _ = detect_entity_misattribution_grounding(
+        prediction=response,
         gold_context=gold_context,
-        ground_truth=ground_truth,
+        distractor_context=distractor_context,
     )
+    return misattr
 
-    if not distinctive_entities:
-        return False
-
-    resp_tokens = set(re.sub(r"[^\w\s]", " ", response.lower()).split())
-    # If any distinctive distractor token appears in the response
-    overlap = resp_tokens & distinctive_entities
-    return len(overlap) > 0
 
 
 # ---------------------------------------------------------------------------
