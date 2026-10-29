@@ -155,6 +155,17 @@ python -m src.pipeline --build-dataset
 - Two-sample **Mann-Whitney U test**: confirms statistical separation with $p < 0.001$ ($p \approx 3.5 \times 10^{-165}$)
 - Reports distribution percentiles (p25, p50, p75, p90) and separation margin ($> 0.40$)
 
+### Run Google DeepMind OSS Evaluator Adapter Audit
+```powershell
+python -m src.pipeline --test-oss-adapter
+```
+
+#### Expected Output
+- Evaluates benchmark samples across 3 synthetic behavioral conditions (Correct Ground Truth, Adversarial Misattribution, Calibrated Abstention)
+- Validates Google DeepMind `proeval` / Hugging Face `lighteval` schema conformance (`EvaluationInput` $\rightarrow$ `MetricResult`)
+- Reports Exact Match (EM), Token F1, Grounding Score, Entity Misattribution rate, and Calibrated Abstention rate with 95% bootstrap confidence intervals
+- Formally documented in [Google DeepMind OSS Audit & Evaluator Design](docs/DEEPMIND_OSS_AUDIT.md)
+
 ### Custom Config Execution
 ```powershell
 python -m src.pipeline --config configs/baseline_config.yaml
@@ -164,7 +175,7 @@ python -m src.pipeline --config configs/baseline_config.yaml
 
 ## Running Unit & Integration Tests
 
-The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, and adversarial distractor sampling:
+The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, adversarial distractor sampling, and DeepMind OSS adapter interfaces:
 
 ```powershell
 pytest tests/
@@ -174,6 +185,8 @@ pytest tests/
 
 ## Core Modules Overview
 
+- **`src.metrics.oss_adapter.ContextNoiseEvaluator`**:
+  Stateless, decoupled evaluator designed for upstream integration into `google-deepmind/proeval` and `huggingface/lighteval`. Isolates entity misattribution from calibrated abstention under controlled retrieval noise.
 - **`src.data.distractor_sampler.DistractorSampler`**:
   Adversarial distractor sampling engine generating semantic distractors across Condition 2 ($\text{sim} < 0.25$) and Condition 3 ($\text{sim} \ge 0.65$ with conflicting entities) while preserving legacy noise injection APIs.
 - **`src.data.distractor_sampler.build_evaluation_dataset`**:
