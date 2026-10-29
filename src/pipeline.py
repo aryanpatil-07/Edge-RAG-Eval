@@ -27,6 +27,14 @@ from src.data.distractor_sampler import (
     build_evaluation_dataset,
     compute_statistical_separation,
 )
+from src.benchmark_runner import (
+    BenchmarkRunner,
+    BenchmarkSummary,
+    compare_conditions,
+    display_benchmark_ascii,
+    display_benchmark_rich,
+    format_rag_prompt,
+)
 from src.metrics.grounding import (
     GroundingMetrics,
     compute_exact_match,
@@ -1123,6 +1131,115 @@ def run_metrics_test() -> int:
     return 0
 
 
+def run_benchmark(
+    conditions: str = "1,2",
+    limit: Optional[int] = None,
+    model_name: Optional[str] = None,
+    dataset_path: str = "data/processed/eval_500.json",
+    results_dir: str = "results",
+    device: str = "auto",
+) -> int:
+    """Execute automated benchmark pipeline across Condition 1 and Condition 2.
+
+    Args:
+        conditions: Comma-separated list of condition numbers (e.g., '1,2').
+        limit: Optional maximum number of samples to evaluate.
+        model_name: Model identifier (defaults to 'gemma:2b').
+        dataset_path: Path to benchmark evaluation json.
+        results_dir: Path to save result json files and checkpoints.
+        device: Target compute device.
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    model_target = model_name or "gemma:2b"
+    logger.info("Initializing automated benchmark runner for model '%s'...", model_target)
+
+    # 1. Check inference engine status
+    server_up, model_ready, status_msg = check_ollama(model_name=model_target)
+    logger.info("Inference Engine Status: %s", status_msg)
+
+    inference_client = GemmaInferenceClient(
+        model_name=model_target,
+        device=device,
+    )
+    evaluator = ContextNoiseEvaluator()
+
+    runner = BenchmarkRunner(
+        inference_client=inference_client,
+        evaluator=evaluator,
+        dataset_path=dataset_path,
+        results_dir=results_dir,
+    )
+
+    clean_model = runner.get_clean_model_name()
+    cond_list = [c.strip() for c in conditions.split(",") if c.strip()]
+
+    summary_c1: Optional[BenchmarkSummary] = None
+    summary_c2: Optional[BenchmarkSummary] = None
+
+    # 2. Execute Condition 1 (Gold Only)
+    if "1" in cond_list:
+        logger.info("Executing Condition 1: Gold Context Only (Control Baseline)...")
+        summary_c1 = runner.run_condition(
+            condition="gold_only",
+            limit=limit,
+        )
+        c1_out_file = Path(results_dir) / f"{clean_model}_condition1_raw.json"
+        with open(c1_out_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "condition": "gold_only",
+                "model_name": summary_c1.model_name,
+                "sample_count": summary_c1.sample_count,
+                "summary": summary_c1.model_dump(exclude={"results"}),
+                "records": summary_c1.results,
+            }, f, indent=2, ensure_ascii=False)
+        logger.info("Saved Condition 1 raw results to '%s'.", c1_out_file)
+
+    # 3. Execute Condition 2 (Random Distractor)
+    if "2" in cond_list:
+        logger.info("Executing Condition 2: Gold Context + Random Distractor (Low Noise)...")
+        summary_c2 = runner.run_condition(
+            condition="random_distractor",
+            limit=limit,
+        )
+        c2_out_file = Path(results_dir) / f"{clean_model}_condition2_raw.json"
+        with open(c2_out_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "condition": "random_distractor",
+                "model_name": summary_c2.model_name,
+                "sample_count": summary_c2.sample_count,
+                "summary": summary_c2.model_dump(exclude={"results"}),
+                "records": summary_c2.results,
+            }, f, indent=2, ensure_ascii=False)
+        logger.info("Saved Condition 2 raw results to '%s'.", c2_out_file)
+
+    # 4. Comparative visualization if both conditions executed
+    if summary_c1 and summary_c2:
+        comparison = compare_conditions(summary_c1, summary_c2)
+        try:
+            display_benchmark_rich(comparison)
+        except ImportError:
+            display_benchmark_ascii(comparison)
+    elif summary_c1:
+        logger.info(
+            "Condition 1 completed: EM=%.4f, F1=%.4f, Grounding=%.4f",
+            summary_c1.exact_match_mean,
+            summary_c1.token_f1_mean,
+            summary_c1.grounding_score_mean,
+        )
+    elif summary_c2:
+        logger.info(
+            "Condition 2 completed: EM=%.4f, F1=%.4f, Grounding=%.4f",
+            summary_c2.exact_match_mean,
+            summary_c2.token_f1_mean,
+            summary_c2.grounding_score_mean,
+        )
+
+    return 0
+
+
+
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from a YAML file.
 
@@ -1183,6 +1300,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run deterministic grounding metrics and entity misattribution diagnostic test.",
     )
     parser.add_argument(
+        "--run-benchmark",
+        action="store_true",
+        help="Execute automated multi-condition benchmark evaluation (Conditions 1 and 2).",
+    )
+    parser.add_argument(
+        "--conditions",
+        type=str,
+        default="1,2",
+        help="Comma-separated experimental conditions to benchmark (default: '1,2').",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Sample count limit for testing/smoke runs (e.g., --limit 10).",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Target model identifier (default: from config or 'gemma:2b').",
+    )
+    parser.add_argument(
         "--dataset-size",
         type=int,
         default=500,
@@ -1193,6 +1333,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="data/processed/eval_500.json",
         help="Target filepath for generated benchmark dataset (default: data/processed/eval_500.json).",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default="results",
+        help="Directory path where evaluation results and checkpoints are saved (default: 'results').",
     )
     parser.add_argument(
         "--config",
@@ -1235,6 +1381,18 @@ def main(args_list: Optional[list[str]] = None) -> int:
             device = models_cfg.get("device", device)
         except Exception as e:
             logger.warning("Could not read config '%s': %s", args.config, e)
+
+    target_model = args.model or generator_model
+
+    if args.run_benchmark:
+        return run_benchmark(
+            conditions=args.conditions,
+            limit=args.limit,
+            model_name=target_model,
+            dataset_path=args.dataset_output if Path(args.dataset_output).is_file() else "data/processed/eval_500.json",
+            results_dir=args.results_dir,
+            device=device,
+        )
 
     if args.test_metrics:
         return run_metrics_test()

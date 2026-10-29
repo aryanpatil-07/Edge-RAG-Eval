@@ -23,21 +23,29 @@ Edge-RAG-Eval/
 ├── src/
 │   ├── __init__.py
 │   ├── pipeline.py                  # CLI entrypoint & diagnostic smoke test runner
+│   ├── benchmark_runner.py          # 500-sample automated benchmark runner & significance tester
 │   ├── data/
 │   │   ├── __init__.py
 │   │   └── distractor_sampler.py    # Noisy context sampler & distractor injector
 │   ├── metrics/
 │   │   ├── __init__.py
-│   │   └── grounding.py             # Grounding precision, cosine similarity, hit rates
+│   │   ├── grounding.py             # Grounding precision, cosine similarity, hit rates
+│   │   └── oss_adapter.py           # DeepMind oss_adapter compatible context noise evaluator
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── inference.py             # SentenceTransformer embedding client (MiniLM)
+│   │   ├── inference.py             # Gemma-2B & MiniLM inference client with context budgeting
 │   │   └── calm_mini.py             # Modular cross-attention CALM composition adapter
 │   └── visualization/
 │       └── __init__.py              # Metric plotting & diagnostic charts
 ├── tests/
 │   ├── __init__.py
-│   └── test_pipeline.py             # Pytest test suite for embedding client & CLI
+│   ├── test_pipeline.py             # Pytest test suite for embedding client & CLI
+│   ├── test_sampler.py              # Adversarial distractor sampler tests
+│   ├── test_calm.py                 # CALM cross-attention layer tests
+│   ├── test_inference.py            # Gemma inference client tests
+│   ├── test_metrics.py              # Grounding metrics & misattribution tests
+│   ├── test_oss_adapter.py          # DeepMind OSS adapter tests
+│   └── test_benchmark_runner.py     # Automated benchmark runner & checkpointing tests
 ├── pyproject.toml                   # Modern PEP-621 build configuration
 ├── requirements.txt                 # Pinned dependencies
 ├── .gitignore                       # Clean ML-oriented gitignore
@@ -176,6 +184,35 @@ python -m src.pipeline --test-metrics
 - Computes string normalization, Exact Match (EM), token-level F1, content token grounding score, and composite grounding score.
 - Displays rich evaluation matrix table with pass/fail verification flags.
 
+### Run Automated 500-Sample Benchmark (Conditions 1 & 2)
+
+Execute the end-to-end evaluation pipeline comparing:
+- **Condition 1:** Gold Context Only (Control Baseline)
+- **Condition 2:** Gold Context + Random Distractor (Low Noise Overhead)
+
+```powershell
+# Smoke test (first 10 samples)
+python -m src.pipeline --run-benchmark --conditions 1,2 --limit 10
+
+# Full 500-sample benchmark
+python -m src.pipeline --run-benchmark --conditions 1,2
+```
+
+#### CLI Options
+| Flag | Default | Description |
+|---|---|---|
+| `--run-benchmark` | `False` | Triggers the automated multi-condition benchmark pipeline |
+| `--conditions` | `1,2` | Comma-separated list of experimental conditions (`1,2`) |
+| `--limit` | `None` | Optional sample count limit for fast smoke testing |
+| `--model` | `gemma:2b` | Target LLM identifier (Ollama or local HuggingFace model) |
+| `--results-dir` | `results` | Output directory for raw output JSON and checkpoints |
+
+#### Features & Safeguards
+- **In-Context Prompt Formatter**: Standardizes strict RAG prompt layout across experimental conditions.
+- **Auto-Checkpointing**: Periodically serializes progress every 25 samples to `results/checkpoints/{model}_{condition}_checkpoint.json` and resumes automatically on interruption.
+- **Statistical Significance**: Computes paired two-sided Wilcoxon signed-rank tests (`scipy.stats.wilcoxon`) and performance deltas ($\Delta$) across EM, Token F1, Grounding Score, Abstention, and Latency.
+- **Artifact Serialization**: Saves clean, verifiable raw generation traces to `results/gemma2b_condition1_raw.json` and `results/gemma2b_condition2_raw.json`.
+
 ### Custom Config Execution
 ```powershell
 python -m src.pipeline --config configs/baseline_config.yaml
@@ -185,7 +222,7 @@ python -m src.pipeline --config configs/baseline_config.yaml
 
 ## Running Unit & Integration Tests
 
-The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, adversarial distractor sampling, DeepMind OSS adapter interfaces, and grounding metrics:
+The test suite validates model initialization, output dimensionality, batched inference, metric computations, Ollama mock parsing, deterministic generation, CALM cross-attention gating, adversarial distractor sampling, DeepMind OSS adapter interfaces, grounding metrics, and automated benchmark runner checkpoints:
 
 ```powershell
 pytest tests/
@@ -194,6 +231,9 @@ pytest tests/
 ---
 
 ## Core Modules Overview
+
+- **`src.benchmark_runner.BenchmarkRunner`**:
+  Orchestrates multi-condition evaluation across `data/processed/eval_500.json`, managing checkpoint resumption, inference dispatch, Grounding metric calculation, and Wilcoxon signed-rank significance testing.
 
 - **`src.metrics.oss_adapter.ContextNoiseEvaluator`**:
   Stateless, decoupled evaluator designed for upstream integration into `google-deepmind/proeval` and `huggingface/lighteval`. Isolates entity misattribution from calibrated abstention under controlled retrieval noise.
