@@ -9,6 +9,7 @@ from src.models.calm_mini import (
     CALMCompositionalWrapper,
     CALMCrossAttentionLayer,
     CALMMiniCrossAttention,
+    compute_attention_allocation,
 )
 from src.pipeline import main, run_calm_test
 
@@ -186,4 +187,76 @@ def test_calm_diagnostic_runner():
 def test_cli_test_calm_flag():
     """Verify CLI main entrypoint executes --test-calm successfully with exit code 0."""
     exit_code = main(["--test-calm"])
+    assert exit_code == 0
+
+
+def test_attention_weights_sum_to_one():
+    """Verify that CALM cross-attention weights sum strictly to 1.0 across keys."""
+    layer = CALMCrossAttentionLayer(anchor_dim=2048, augment_dim=384, attn_dim=512, num_heads=8)
+    anchor = torch.randn(2, 7, 2048)
+    augment = torch.randn(2, 25, 384)
+
+    out, attn_weights = layer(anchor, augment, return_attention_weights=True)
+
+    assert attn_weights.shape == (2, 8, 7, 25)
+    sums = attn_weights.sum(dim=-1)
+    expected = torch.ones_like(sums)
+    assert torch.allclose(sums, expected, atol=1e-5)
+
+
+def test_compute_attention_allocation_synthetic_orthogonal():
+    """Verify compute_attention_allocation calculates exact mass on orthogonal synthetic attention."""
+    # Pure gold attention: first 5 tokens receive all attention mass
+    attn_pure_gold = torch.zeros(1, 1, 1, 10)
+    attn_pure_gold[0, 0, 0, :5] = 0.2
+
+    alloc_gold = compute_attention_allocation(attn_pure_gold, (0, 5), (5, 10))
+    assert alloc_gold["gold_attention_mass"] == pytest.approx(1.0, abs=1e-4)
+    assert alloc_gold["distractor_attention_mass"] == pytest.approx(0.0, abs=1e-4)
+    assert alloc_gold["leakage_ratio"] == pytest.approx(0.0, abs=1e-4)
+
+    # Pure distractor attention: last 5 tokens receive all attention mass
+    attn_pure_dist = torch.zeros(1, 1, 1, 10)
+    attn_pure_dist[0, 0, 0, 5:] = 0.2
+
+    alloc_dist = compute_attention_allocation(attn_pure_dist, (0, 5), (5, 10))
+    assert alloc_dist["gold_attention_mass"] == pytest.approx(0.0, abs=1e-4)
+    assert alloc_dist["distractor_attention_mass"] == pytest.approx(1.0, abs=1e-4)
+    assert alloc_dist["leakage_ratio"] == pytest.approx(1.0, abs=1e-4)
+
+    # Balanced 50/50 allocation
+    attn_half = torch.full((1, 1, 1, 10), 0.1)
+    alloc_half = compute_attention_allocation(attn_half, (0, 5), (5, 10))
+    assert alloc_half["gold_attention_mass"] == pytest.approx(0.5, abs=1e-4)
+    assert alloc_half["distractor_attention_mass"] == pytest.approx(0.5, abs=1e-4)
+    assert alloc_half["leakage_ratio"] == pytest.approx(0.5, abs=1e-4)
+
+
+def test_gradient_isolation_with_attention_weights():
+    """Verify base anchor and augment tensors remain frozen when return_attention_weights=True."""
+    wrapper = CALMCompositionalWrapper(anchor_dim=2048, augment_dim=384, attn_dim=512, num_heads=8)
+    with torch.no_grad():
+        wrapper.cross_attention.gamma.data.fill_(1.0)
+
+    anchor = torch.randn(2, 6, 2048, requires_grad=False)
+    augment = torch.randn(2, 14, 384, requires_grad=False)
+
+    out, attn_weights = wrapper(anchor, augment, return_attention_weights=True)
+    loss = out.sum() + attn_weights.sum()
+    loss.backward()
+
+    # Base tensors must remain completely frozen
+    assert anchor.grad is None
+    assert augment.grad is None
+
+    # Trainable adapter projection matrices receive gradients
+    assert wrapper.cross_attention.q_proj.weight.grad is not None
+    assert wrapper.cross_attention.k_proj.weight.grad is not None
+    assert wrapper.cross_attention.v_proj.weight.grad is not None
+    assert wrapper.cross_attention.out_proj.weight.grad is not None
+
+
+def test_cli_inspect_attention_flag():
+    """Verify CLI main entrypoint executes --inspect-attention successfully with limit 2."""
+    exit_code = main(["--inspect-attention", "--limit", "2"])
     assert exit_code == 0

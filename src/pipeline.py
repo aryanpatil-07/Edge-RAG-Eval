@@ -57,6 +57,7 @@ from src.metrics.oss_adapter import (
 from src.models.calm_mini import (
     CALMCompositionalWrapper,
     CALMCrossAttentionLayer,
+    compute_attention_allocation,
 )
 from src.models.inference import (
     EmbeddingClient,
@@ -451,6 +452,188 @@ def run_calm_test(
         display_calm_rich(results)
     except ImportError:
         display_calm_ascii(results)
+
+    return 0
+
+
+def display_attention_inspection_rich(results: list[dict[str, Any]]) -> None:
+    """Render CALM cross-attention allocation table using rich console formatting."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console(width=max(Console().width or 100, 115))
+
+    table = Table(
+        title="Edge-RAG-Eval | CALM Cross-Attention Mass Allocation & Leakage Inspection",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Sample ID", style="bold white", width=12)
+    table.add_column("Query Preview", style="cyan", width=34)
+    table.add_column("Sim(Q, Dist)", justify="center", width=14)
+    table.add_column("Gold Mass (%)", justify="center", width=16)
+    table.add_column("Distractor Mass (%)", justify="center", width=20)
+    table.add_column("Leakage Ratio", justify="center", width=15)
+
+    gold_masses: list[float] = []
+    dist_masses: list[float] = []
+    leakage_ratios: list[float] = []
+
+    for r in results:
+        g_mass = r["gold_attention_mass"] * 100.0
+        d_mass = r["distractor_attention_mass"] * 100.0
+        leak = r["leakage_ratio"]
+        sim_val = r["sim_adversarial_query"]
+
+        gold_masses.append(g_mass)
+        dist_masses.append(d_mass)
+        leakage_ratios.append(leak)
+
+        leak_style = "[bold red]" if leak >= 0.40 else "[yellow]"
+        leak_str = f"{leak_style}{leak:.4f}[/]"
+
+        query_preview = r["query"][:32] + "..." if len(r["query"]) > 32 else r["query"]
+
+        table.add_row(
+            r["sample_id"],
+            query_preview,
+            f"[yellow]{sim_val:.4f}[/yellow]",
+            f"[green]{g_mass:.1f}%[/green]",
+            f"[magenta]{d_mass:.1f}%[/magenta]",
+            leak_str,
+        )
+
+    mean_gold = float(np.mean(gold_masses)) if gold_masses else 0.0
+    mean_dist = float(np.mean(dist_masses)) if dist_masses else 0.0
+    mean_leak = float(np.mean(leakage_ratios)) if leakage_ratios else 0.0
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold green]CALM Cross-Attention Mass Allocation Complete[/bold green]\n"
+        f"[bold white]Samples Inspected:[/] {len(results)} queries under Condition 3 (Adversarial Distractor)\n"
+        f"[bold white]Mean Gold Attention Mass:[/] [green]{mean_gold:.1f}%[/green]\n"
+        f"[bold white]Mean Distractor Attention Mass:[/] [magenta]{mean_dist:.1f}%[/magenta]\n"
+        f"[bold white]Mean Cross-Attention Leakage Ratio:[/] [bold red]{mean_leak:.4f}[/bold red]",
+        border_style="green",
+    ))
+    console.print(table)
+    console.print()
+
+
+def display_attention_inspection_ascii(results: list[dict[str, Any]]) -> None:
+    """Fallback plain-text ASCII renderer for CALM attention inspection."""
+    print("\n" + "=" * 90)
+    print("Edge-RAG-Eval | CALM Cross-Attention Mass Allocation & Leakage Inspection")
+    print("=" * 90)
+    print(f"{'Sample ID':<12} | {'Query Preview':<30} | {'Sim(Q, D)':<10} | {'Gold Mass':<10} | {'Dist Mass':<10} | {'Leakage':<10}")
+    print("-" * 90)
+
+    leakage_ratios = []
+    for r in results:
+        q_prev = r['query'][:28] + "..." if len(r['query']) > 28 else r['query']
+        leakage_ratios.append(r['leakage_ratio'])
+        print(f"{r['sample_id']:<12} | {q_prev:<30} | {r['sim_adversarial_query']:<10.4f} | {r['gold_attention_mass']*100:<9.1f}% | {r['distractor_attention_mass']*100:<9.1f}% | {r['leakage_ratio']:<10.4f}")
+
+    mean_leak = float(np.mean(leakage_ratios)) if leakage_ratios else 0.0
+    print("=" * 90)
+    print(f"Mean Attention Leakage Across Batch: {mean_leak:.4f}\n")
+
+
+def run_inspect_attention(
+    dataset_path: str = "data/processed/eval_500.json",
+    limit: Optional[int] = 10,
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+    device: str = "auto",
+) -> int:
+    """Execute cross-attention mass allocation inspection across Condition 3 samples.
+
+    Args:
+        dataset_path: Path to benchmark evaluation json.
+        limit: Number of samples to inspect (default: 10).
+        embedding_model: Embedding model name.
+        device: Target compute device.
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    target_limit = limit if limit is not None else 10
+    path = Path(dataset_path)
+    if not path.is_file():
+        logger.error("Dataset not found at '%s'. Run --build-dataset first.", dataset_path)
+        return 1
+
+    with open(path, "r", encoding="utf-8") as f:
+        data: list[dict[str, Any]] = json.load(f)
+
+    samples = data[:target_limit]
+    logger.info("Inspecting CALM cross-attention allocation on %d samples from '%s'...", len(samples), path)
+
+    torch.manual_seed(42)
+    embedding_client = EmbeddingClient(model_name=embedding_model, device=device)
+    wrapper = CALMCompositionalWrapper(
+        anchor_dim=2048,
+        augment_dim=384,
+        attn_dim=512,
+        num_heads=8,
+    )
+    wrapper.eval()
+
+    results: list[dict[str, Any]] = []
+
+    for i, s in enumerate(samples):
+        sample_id = s.get("sample_id", f"sample_{i:03d}")
+        query = s["query"]
+        gold_context = s["gold_context"]
+        adversarial_distractor = s.get("adversarial_distractor", "")
+        sim_adv = s.get("sim_adversarial_query")
+
+        # Encode context passages
+        g_feat = embedding_client.model.tokenizer(
+            gold_context, truncation=True, max_length=128, return_tensors="pt"
+        )
+        d_feat = embedding_client.model.tokenizer(
+            adversarial_distractor, truncation=True, max_length=128, return_tensors="pt"
+        )
+
+        with torch.no_grad():
+            g_emb = embedding_client.model[0](g_feat)["token_embeddings"]
+            d_emb = embedding_client.model[0](d_feat)["token_embeddings"]
+            ctx_emb = torch.cat([g_emb, d_emb], dim=1)
+
+            # Query representation in anchor space
+            q_feat = embedding_client.model.tokenizer(
+                query, truncation=True, max_length=64, return_tensors="pt"
+            )
+            q_emb = embedding_client.model[0](q_feat)["token_embeddings"]
+            q_anchor = torch.zeros(1, q_emb.shape[1], 2048)
+            q_anchor[:, :, :384] = q_emb
+
+            gold_span = (0, g_emb.shape[1])
+            dist_span = (g_emb.shape[1], ctx_emb.shape[1])
+
+            out, attn_weights = wrapper(q_anchor, ctx_emb, return_attention_weights=True)
+
+        alloc = compute_attention_allocation(attn_weights, gold_span, dist_span)
+
+        if sim_adv is None:
+            q_vec = embedding_client.encode(query, normalize=True)[0]
+            d_vec = embedding_client.encode(adversarial_distractor, normalize=True)[0]
+            sim_adv = float(np.dot(q_vec, d_vec))
+
+        results.append({
+            "sample_id": sample_id,
+            "query": query,
+            "sim_adversarial_query": float(sim_adv),
+            "gold_attention_mass": alloc["gold_attention_mass"],
+            "distractor_attention_mass": alloc["distractor_attention_mass"],
+            "leakage_ratio": alloc["leakage_ratio"],
+        })
+
+    try:
+        display_attention_inspection_rich(results)
+    except ImportError:
+        display_attention_inspection_ascii(results)
 
     return 0
 
@@ -1398,6 +1581,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the CALM cross-attention architecture audit and gradient isolation diagnostic.",
     )
     parser.add_argument(
+        "--inspect-attention",
+        action="store_true",
+        help="Inspect CALM cross-attention mass allocation and leakage between gold and adversarial distractor.",
+    )
+    parser.add_argument(
         "--test-sampler",
         action="store_true",
         help="Run 5-sample verification test for adversarial and random distractor sampling engine.",
@@ -1536,6 +1724,14 @@ def main(args_list: Optional[list[str]] = None) -> int:
         return run_build_dataset(
             output_path=args.dataset_output,
             num_samples=args.dataset_size,
+            device=device,
+        )
+
+    if args.inspect_attention:
+        return run_inspect_attention(
+            dataset_path=args.dataset_output if Path(args.dataset_output).is_file() else "data/processed/eval_500.json",
+            limit=args.limit,
+            embedding_model=embedding_model,
             device=device,
         )
 

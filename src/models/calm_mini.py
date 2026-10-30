@@ -91,16 +91,20 @@ class CALMCrossAttentionLayer(nn.Module):
         anchor_hidden_states: torch.Tensor,
         augment_hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_attention_weights: bool = False,
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
         """Execute forward cross-attention and gated residual connection.
 
         Args:
             anchor_hidden_states: Anchor representations of shape (batch, seq_len, anchor_dim).
             augment_hidden_states: Augmenting representations of shape (batch, ctx_len, augment_dim).
             attention_mask: Optional attention mask of shape (batch, 1, seq_len, ctx_len) or (batch, ctx_len).
+            return_attention_weights: Whether to return the normalized cross-attention weights tensor.
 
         Returns:
-            torch.Tensor: Gated augmented representation of shape (batch, seq_len, anchor_dim).
+            torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
+                - Gated augmented representation of shape (batch, seq_len, anchor_dim) if return_attention_weights is False.
+                - Tuple of (output, attention_weights) of shape (batch, num_heads, seq_len, ctx_len) if return_attention_weights is True.
         """
         batch_size, seq_len, _ = anchor_hidden_states.shape
         _, ctx_len, _ = augment_hidden_states.shape
@@ -133,10 +137,10 @@ class CALMCrossAttentionLayer(nn.Module):
             scores = scores.masked_fill(mask == 0, -1e9)
 
         attn_weights = F.softmax(scores, dim=-1)
-        attn_weights = self.dropout(attn_weights)
+        dropped_attn = self.dropout(attn_weights)
 
         # Attention context: (B, num_heads, seq_len, head_dim)
-        context = torch.matmul(attn_weights, v)
+        context = torch.matmul(dropped_attn, v)
 
         # Reshape to (B, seq_len, attn_dim)
         context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, self.attn_dim)
@@ -146,6 +150,9 @@ class CALMCrossAttentionLayer(nn.Module):
 
         # Gated residual: H_tilde = H_anchor + gamma * AttentionOutput
         output = anchor_hidden_states + self.gamma * attn_output
+
+        if return_attention_weights:
+            return output, attn_weights
         return output
 
     @property
@@ -198,21 +205,24 @@ class CALMCompositionalWrapper(nn.Module):
         anchor_hidden_states: torch.Tensor,
         augment_hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        return_attention_weights: bool = False,
+    ) -> torch.Tensor | Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the cross-attention adapter.
 
         Args:
             anchor_hidden_states: Anchor representations (B, L, anchor_dim).
             augment_hidden_states: Augment representations (B, L_aug, augment_dim).
             attention_mask: Optional attention mask.
+            return_attention_weights: Whether to return attention weights.
 
         Returns:
-            torch.Tensor: Composed representation of shape (B, L, anchor_dim).
+            torch.Tensor | Tuple[torch.Tensor, torch.Tensor]: Composed output or (output, attention_weights).
         """
         return self.cross_attention(
             anchor_hidden_states=anchor_hidden_states,
             augment_hidden_states=augment_hidden_states,
             attention_mask=attention_mask,
+            return_attention_weights=return_attention_weights,
         )
 
     def get_parameter_breakdown(self) -> Dict[str, Any]:
@@ -242,3 +252,64 @@ class CALMCompositionalWrapper(nn.Module):
 
 # Alias for backward compatibility
 CALMMiniCrossAttention = CALMCrossAttentionLayer
+
+
+# ---------------------------------------------------------------------------
+# Attention Allocation Inspection Utility
+# ---------------------------------------------------------------------------
+
+def compute_attention_allocation(
+    attention_weights: torch.Tensor,
+    gold_token_span: tuple[int, int],
+    distractor_token_span: tuple[int, int],
+) -> dict[str, float]:
+    """Computes the percentage of attention mass allocated to Gold vs Distractor.
+
+    Args:
+        attention_weights: Cross-attention weights tensor of shape (B, H, L_anchor, L_aug),
+            (H, L_anchor, L_aug), or (L_anchor, L_aug).
+        gold_token_span: (start_idx, end_idx) token span in augment keys for gold context.
+        distractor_token_span: (start_idx, end_idx) token span in augment keys for distractor context.
+
+    Returns:
+        dict[str, float]:
+            - 'gold_attention_mass': float in [0.0, 1.0]
+            - 'distractor_attention_mass': float in [0.0, 1.0]
+            - 'leakage_ratio': float in [0.0, 1.0] representing distractor_mass / (gold_mass + distractor_mass)
+    """
+    if not isinstance(attention_weights, torch.Tensor):
+        attention_weights = torch.tensor(attention_weights, dtype=torch.float32)
+
+    # Average attention across batch, head, and anchor sequence dimensions -> (L_aug,)
+    if attention_weights.dim() == 4:
+        mean_attn = attention_weights.mean(dim=(0, 1, 2))
+    elif attention_weights.dim() == 3:
+        mean_attn = attention_weights.mean(dim=(0, 1))
+    elif attention_weights.dim() == 2:
+        mean_attn = attention_weights.mean(dim=0)
+    elif attention_weights.dim() == 1:
+        mean_attn = attention_weights
+    else:
+        raise ValueError(f"Unsupported attention weights shape: {attention_weights.shape}")
+
+    total_keys = len(mean_attn)
+    g_start, g_end = gold_token_span
+    d_start, d_end = distractor_token_span
+
+    # Safe index bounds
+    g_start = max(0, min(g_start, total_keys))
+    g_end = max(0, min(g_end, total_keys))
+    d_start = max(0, min(d_start, total_keys))
+    d_end = max(0, min(d_end, total_keys))
+
+    gold_mass = float(mean_attn[g_start:g_end].sum().item()) if g_end > g_start else 0.0
+    distractor_mass = float(mean_attn[d_start:d_end].sum().item()) if d_end > d_start else 0.0
+
+    total_mass = gold_mass + distractor_mass
+    leakage = float(distractor_mass / total_mass) if total_mass > 0.0 else 0.0
+
+    return {
+        "gold_attention_mass": round(gold_mass, 4),
+        "distractor_attention_mass": round(distractor_mass, 4),
+        "leakage_ratio": round(leakage, 4),
+    }

@@ -226,6 +226,20 @@ python -m src.pipeline --generate-report
 python -m src.pipeline --config configs/baseline_config.yaml
 ```
 
+### CALM Cross-Attention Mass Allocation Inspection
+
+Inspect and quantify cross-attention mass captured by the adversarial distractor versus the gold context using modular CALM cross-attention:
+
+```powershell
+# Inspect attention allocation across 10 samples under Condition 3
+python -m src.pipeline --inspect-attention --limit 10
+```
+
+#### Outputs
+- Multi-head attention tensor $\mathbf{A} \in \mathbb{R}^{B \times H \times L_{anchor} \times L_{aug}}$ strictly summing to $1.0$ across key tokens.
+- Gold Attention Mass (%), Distractor Attention Mass (%), and Attention Leakage Ratio $\frac{\text{distractor\_mass}}{\text{gold\_mass} + \text{distractor\_mass}}$.
+- Formatted summary table via `rich.table` and batch average statistics.
+
 ---
 
 ## Running Unit & Integration Tests
