@@ -16,9 +16,11 @@ from pydantic import ValidationError
 from src.benchmark_runner import (
     BenchmarkRunner,
     BenchmarkSummary,
+    ComparativeAnalysis,
     compare_conditions,
     compute_paired_significance,
     format_rag_prompt,
+    generate_comparative_report,
 )
 from src.metrics.oss_adapter import ContextNoiseEvaluator, MetricResult
 from src.models.inference import GenerationResult, GemmaInferenceClient
@@ -78,6 +80,24 @@ def test_prompt_assembly_condition_2_missing_distractor_fallback():
     )
     assert gold in prompt
     assert "None" not in prompt
+
+
+def test_prompt_assembly_condition_3():
+    """Verify Condition 3 prompt format contains gold context concatenated with adversarial distractor."""
+    gold = "The Apollo 11 lunar module Eagle touched down on the Moon on July 20, 1969."
+    adv_distractor = "The Apollo 11 lunar module Eagle conflicting touched down on Mars on July 20, 1969."
+    query = "In what year did Apollo 11 land?"
+    prompt = format_rag_prompt(
+        query=query,
+        gold_context=gold,
+        distractor_context=adv_distractor,
+        condition="adversarial_distractor",
+    )
+
+    assert gold in prompt
+    assert adv_distractor in prompt
+    assert f"{gold}\n\n{adv_distractor}" in prompt
+    assert f"Question: {query}" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -271,3 +291,104 @@ def test_cli_run_benchmark_smoke_limit(tmp_path: Path):
         data_c1 = json.load(f)
     assert data_c1["condition"] == "gold_only"
     assert len(data_c1["records"]) == 5
+
+
+def test_entity_misattribution_recorded_in_condition_3(tmp_path: Path):
+    """Verify entity misattribution is recorded when distractor entities are generated."""
+    mock_data = [
+        {
+            "sample_id": "eval_test_adv_001",
+            "query": "Where did France focus its efforts?",
+            "ground_truth_answer": "Africa",
+            "gold_context": "France focused its efforts in North Africa and Algeria.",
+            "random_distractor": "Photosynthesis occurs in plant cells.",
+            "adversarial_distractor": "Where did France focus its efforts: Prussia focused its efforts in Saxony.",
+        }
+    ]
+    data_file = tmp_path / "mock_adv_data.json"
+    with open(data_file, "w", encoding="utf-8") as f:
+        json.dump(mock_data, f)
+
+    # Mock client that adopts the false entity 'Prussia' from the adversarial distractor
+    mock_client = MagicMock(spec=GemmaInferenceClient)
+    mock_client.model_name = "gemma:2b"
+    mock_client.generate.return_value = GenerationResult(
+        model_name="gemma:2b",
+        response_text="Prussia focused its efforts in Saxony.",
+        prompt_tokens=40,
+        completion_tokens=8,
+        tokens_per_second=30.0,
+        total_latency_ms=25.0,
+    )
+
+    evaluator = ContextNoiseEvaluator()
+    runner = BenchmarkRunner(
+        inference_client=mock_client,
+        evaluator=evaluator,
+        dataset_path=str(data_file),
+        results_dir=str(tmp_path / "results"),
+    )
+
+    summary = runner.run_condition("adversarial_distractor", limit=1)
+    assert summary.sample_count == 1
+    rec = summary.results[0]
+    assert rec["entity_misattribution"] is True
+    assert summary.entity_misattribution_rate == 1.0
+
+
+def test_comparative_analysis_relative_drops_calculation():
+    """Test calculation of delta EM and delta F1 in ComparativeAnalysis."""
+    # Condition 1 (Baseline: EM = 0.50, F1 = 0.80)
+    res_c1 = [
+        {"sample_id": "s1", "exact_match": 1.0, "token_f1": 1.0, "grounding_score": 1.0, "latency_ms": 30.0},
+        {"sample_id": "s2", "exact_match": 0.0, "token_f1": 0.6, "grounding_score": 0.9, "latency_ms": 32.0},
+    ]
+    # Condition 2 (Low noise: EM = 0.50, F1 = 0.70)
+    res_c2 = [
+        {"sample_id": "s1", "exact_match": 1.0, "token_f1": 0.9, "grounding_score": 0.9, "latency_ms": 35.0},
+        {"sample_id": "s2", "exact_match": 0.0, "token_f1": 0.5, "grounding_score": 0.8, "latency_ms": 36.0},
+    ]
+    # Condition 3 (Adversarial: EM = 0.00, F1 = 0.40)
+    res_c3 = [
+        {"sample_id": "s1", "exact_match": 0.0, "token_f1": 0.5, "grounding_score": 0.7, "entity_misattribution": True, "latency_ms": 40.0},
+        {"sample_id": "s2", "exact_match": 0.0, "token_f1": 0.3, "grounding_score": 0.6, "entity_misattribution": True, "latency_ms": 42.0},
+    ]
+
+    analysis = generate_comparative_report(
+        c1_results={"model_name": "gemma:2b", "results": res_c1},
+        c2_results={"model_name": "gemma:2b", "results": res_c2},
+        c3_results={"model_name": "gemma:2b", "results": res_c3},
+    )
+
+    assert analysis.sample_count == 2
+    # C1 EM mean = 0.50, C3 EM mean = 0.00 -> Drop = (0.00 - 0.50)/0.50 * 100 = -100.0%
+    assert analysis.delta_em_1_to_3_pct == pytest.approx(-100.0)
+    assert analysis.relative_drops["delta_em_1_to_3_pct"] == pytest.approx(-100.0)
+
+    # C1 F1 mean = 0.80, C3 F1 mean = 0.40 -> Drop = (0.40 - 0.80)/0.80 * 100 = -50.0%
+    assert analysis.delta_f1_1_to_3_pct == pytest.approx(-50.0)
+    assert analysis.relative_drops["delta_f1_1_to_3_pct"] == pytest.approx(-50.0)
+
+    # Check that entity misattribution is recorded in analysis
+    assert analysis.entity_misattribution["c3_rate"] == 1.0
+    assert analysis.entity_misattribution["c1_rate"] == 0.0
+
+
+def test_cli_run_benchmark_condition_3_smoke(tmp_path: Path):
+    """Verify CLI main entrypoint executes --run-benchmark with --conditions 3 successfully."""
+    custom_results = tmp_path / "custom_results"
+    exit_code = main([
+        "--run-benchmark",
+        "--conditions", "3",
+        "--limit", "5",
+        "--results-dir", str(custom_results),
+    ])
+    assert exit_code == 0
+
+    c3_path = custom_results / "gemma2b_condition3_adversarial.json"
+    assert c3_path.is_file()
+
+    with open(c3_path, "r", encoding="utf-8") as f:
+        data_c3 = json.load(f)
+    assert data_c3["condition"] == "adversarial_distractor"
+    assert len(data_c3["records"]) == 5

@@ -30,10 +30,14 @@ from src.data.distractor_sampler import (
 from src.benchmark_runner import (
     BenchmarkRunner,
     BenchmarkSummary,
+    ComparativeAnalysis,
     compare_conditions,
+    display_3way_benchmark_ascii,
+    display_3way_benchmark_rich,
     display_benchmark_ascii,
     display_benchmark_rich,
     format_rag_prompt,
+    generate_comparative_report,
 )
 from src.metrics.grounding import (
     GroundingMetrics,
@@ -1139,10 +1143,10 @@ def run_benchmark(
     results_dir: str = "results",
     device: str = "auto",
 ) -> int:
-    """Execute automated benchmark pipeline across Condition 1 and Condition 2.
+    """Execute automated benchmark pipeline across Condition 1, 2, and 3.
 
     Args:
-        conditions: Comma-separated list of condition numbers (e.g., '1,2').
+        conditions: Comma-separated list of condition numbers (e.g., '1,2', '3', or '1,2,3').
         limit: Optional maximum number of samples to evaluate.
         model_name: Model identifier (defaults to 'gemma:2b').
         dataset_path: Path to benchmark evaluation json.
@@ -1177,9 +1181,10 @@ def run_benchmark(
 
     summary_c1: Optional[BenchmarkSummary] = None
     summary_c2: Optional[BenchmarkSummary] = None
+    summary_c3: Optional[BenchmarkSummary] = None
 
     # 2. Execute Condition 1 (Gold Only)
-    if "1" in cond_list:
+    if "1" in cond_list or "gold_only" in cond_list:
         logger.info("Executing Condition 1: Gold Context Only (Control Baseline)...")
         summary_c1 = runner.run_condition(
             condition="gold_only",
@@ -1197,7 +1202,7 @@ def run_benchmark(
         logger.info("Saved Condition 1 raw results to '%s'.", c1_out_file)
 
     # 3. Execute Condition 2 (Random Distractor)
-    if "2" in cond_list:
+    if "2" in cond_list or "random_distractor" in cond_list:
         logger.info("Executing Condition 2: Gold Context + Random Distractor (Low Noise)...")
         summary_c2 = runner.run_condition(
             condition="random_distractor",
@@ -1214,13 +1219,84 @@ def run_benchmark(
             }, f, indent=2, ensure_ascii=False)
         logger.info("Saved Condition 2 raw results to '%s'.", c2_out_file)
 
-    # 4. Comparative visualization if both conditions executed
-    if summary_c1 and summary_c2:
+    # 4. Execute Condition 3 (Adversarial Distractor)
+    if "3" in cond_list or "adversarial_distractor" in cond_list:
+        logger.info("Executing Condition 3: Gold Context + Adversarial Distractor (High Semantic Noise)...")
+        summary_c3 = runner.run_condition(
+            condition="adversarial_distractor",
+            limit=limit,
+        )
+        c3_out_file = Path(results_dir) / f"{clean_model}_condition3_adversarial.json"
+        with open(c3_out_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "condition": "adversarial_distractor",
+                "model_name": summary_c3.model_name,
+                "sample_count": summary_c3.sample_count,
+                "summary": summary_c3.model_dump(exclude={"results"}),
+                "records": summary_c3.results,
+            }, f, indent=2, ensure_ascii=False)
+        logger.info("Saved Condition 3 raw results to '%s'.", c3_out_file)
+
+    # Check for existing condition results on disk to enable full comparative matrix
+    c1_path = Path(results_dir) / f"{clean_model}_condition1_raw.json"
+    c2_path = Path(results_dir) / f"{clean_model}_condition2_raw.json"
+    c3_path = Path(results_dir) / f"{clean_model}_condition3_adversarial.json"
+
+    if summary_c1 is None and c1_path.is_file():
+        try:
+            with open(c1_path, "r", encoding="utf-8") as f:
+                d1 = json.load(f)
+            sum_data = d1.get("summary") or d1
+            summary_c1 = BenchmarkSummary(**sum_data, results=d1.get("records", []))
+        except Exception as e:
+            logger.debug("Could not load existing Condition 1 results from '%s': %s", c1_path, e)
+
+    if summary_c2 is None and c2_path.is_file():
+        try:
+            with open(c2_path, "r", encoding="utf-8") as f:
+                d2 = json.load(f)
+            sum_data = d2.get("summary") or d2
+            summary_c2 = BenchmarkSummary(**sum_data, results=d2.get("records", []))
+        except Exception as e:
+            logger.debug("Could not load existing Condition 2 results from '%s': %s", c2_path, e)
+
+    if summary_c3 is None and c3_path.is_file():
+        try:
+            with open(c3_path, "r", encoding="utf-8") as f:
+                d3 = json.load(f)
+            sum_data = d3.get("summary") or d3
+            summary_c3 = BenchmarkSummary(**sum_data, results=d3.get("records", []))
+        except Exception as e:
+            logger.debug("Could not load existing Condition 3 results from '%s': %s", c3_path, e)
+
+    # 5. Comparative reporting
+    if summary_c1 and summary_c2 and summary_c3:
+        report_out = Path(results_dir) / f"{clean_model}_3way_summary.json"
+        report = runner.generate_comparative_report(
+            c1_results=summary_c1,
+            c2_results=summary_c2,
+            c3_results=summary_c3,
+            output_path=report_out,
+        )
+        try:
+            display_3way_benchmark_rich(report)
+        except ImportError:
+            display_3way_benchmark_ascii(report)
+    elif summary_c1 and summary_c2:
         comparison = compare_conditions(summary_c1, summary_c2)
         try:
             display_benchmark_rich(comparison)
         except ImportError:
             display_benchmark_ascii(comparison)
+    elif summary_c3:
+        logger.info(
+            "Condition 3 completed: EM=%.4f, F1=%.4f, Grounding=%.4f, Misattribution=%.2f%%, Abstention=%.2f%%",
+            summary_c3.exact_match_mean,
+            summary_c3.token_f1_mean,
+            summary_c3.grounding_score_mean,
+            summary_c3.entity_misattribution_rate * 100.0,
+            summary_c3.abstention_rate * 100.0,
+        )
     elif summary_c1:
         logger.info(
             "Condition 1 completed: EM=%.4f, F1=%.4f, Grounding=%.4f",
@@ -1235,6 +1311,48 @@ def run_benchmark(
             summary_c2.token_f1_mean,
             summary_c2.grounding_score_mean,
         )
+
+    return 0
+
+
+def run_generate_report(
+    results_dir: str = "results",
+    model_name: Optional[str] = None,
+) -> int:
+    """Generate and display aggregated 3-way comparative matrix from existing benchmark results.
+
+    Args:
+        results_dir: Directory containing raw result files.
+        model_name: Target model identifier (default: 'gemma:2b').
+
+    Returns:
+        int: Exit status code (0 for success).
+    """
+    model_target = model_name or "gemma:2b"
+    clean_model = model_target.replace(":", "").replace("/", "_").split()[0]
+    res_p = Path(results_dir)
+
+    c1_path = res_p / f"{clean_model}_condition1_raw.json"
+    c2_path = res_p / f"{clean_model}_condition2_raw.json"
+    c3_path = res_p / f"{clean_model}_condition3_adversarial.json"
+
+    missing = [str(p) for p in (c1_path, c2_path, c3_path) if not p.is_file()]
+    if missing:
+        logger.error("Cannot generate 3-way report; missing result files: %s", missing)
+        return 1
+
+    report_out = res_p / f"{clean_model}_3way_summary.json"
+    report = generate_comparative_report(
+        c1_results=c1_path,
+        c2_results=c2_path,
+        c3_results=c3_path,
+        output_path=report_out,
+    )
+
+    try:
+        display_3way_benchmark_rich(report)
+    except ImportError:
+        display_3way_benchmark_ascii(report)
 
     return 0
 
@@ -1302,7 +1420,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run-benchmark",
         action="store_true",
-        help="Execute automated multi-condition benchmark evaluation (Conditions 1 and 2).",
+        help="Execute automated multi-condition benchmark evaluation (Conditions 1, 2, and 3).",
+    )
+    parser.add_argument(
+        "--generate-report",
+        action="store_true",
+        help="Generate and display aggregated 3-way comparative matrix from existing benchmark results.",
     )
     parser.add_argument(
         "--conditions",
@@ -1383,6 +1506,12 @@ def main(args_list: Optional[list[str]] = None) -> int:
             logger.warning("Could not read config '%s': %s", args.config, e)
 
     target_model = args.model or generator_model
+
+    if args.generate_report:
+        return run_generate_report(
+            results_dir=args.results_dir,
+            model_name=target_model,
+        )
 
     if args.run_benchmark:
         return run_benchmark(

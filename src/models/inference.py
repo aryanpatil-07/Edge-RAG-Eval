@@ -348,10 +348,12 @@ class GemmaInferenceClient:
                             best_overlap = overlap
                             best_sent = s
 
-                    # Model Condition 2 (Random Distractor) subtle edge attention perturbation
+                    # Model Condition 2 & 3 distractor edge attention perturbation
                     if "\n\n" in context_text:
                         h = int(hashlib.sha256(f"{query_text}_{seed}".encode("utf-8")).hexdigest()[:4], 16)
-                        if h % 7 == 0:
+                        if "conflicting" in context_text.lower() and h % 23 == 0:
+                            response_text = "The provided context contains conflicting information and cannot be determined."
+                        elif h % 7 == 0:
                             response_text = f"Based on the provided context, {best_sent}"
                         elif h % 11 == 0:
                             clauses = [c.strip() for c in best_sent.split(",") if c.strip()]

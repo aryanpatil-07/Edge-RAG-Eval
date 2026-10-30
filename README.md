@@ -184,34 +184,42 @@ python -m src.pipeline --test-metrics
 - Computes string normalization, Exact Match (EM), token-level F1, content token grounding score, and composite grounding score.
 - Displays rich evaluation matrix table with pass/fail verification flags.
 
-### Run Automated 500-Sample Benchmark (Conditions 1 & 2)
+### Run Automated 500-Sample Benchmark (Conditions 1, 2, & 3)
 
 Execute the end-to-end evaluation pipeline comparing:
 - **Condition 1:** Gold Context Only (Control Baseline)
 - **Condition 2:** Gold Context + Random Distractor (Low Noise Overhead)
+- **Condition 3:** Gold Context + Adversarial Distractor ($\text{cosine similarity} \ge 0.65$ with conflicting entities)
 
 ```powershell
-# Smoke test (first 10 samples)
-python -m src.pipeline --run-benchmark --conditions 1,2 --limit 10
+# Smoke test Condition 3 (10 samples)
+python -m src.pipeline --run-benchmark --conditions 3 --limit 10
 
-# Full 500-sample benchmark
-python -m src.pipeline --run-benchmark --conditions 1,2
+# Full Condition 3 run (500 samples)
+python -m src.pipeline --run-benchmark --conditions 3
+
+# Run all 3 conditions sequentially
+python -m src.pipeline --run-benchmark --conditions 1,2,3
+
+# Generate full 3-way comparative matrix from existing results
+python -m src.pipeline --generate-report
 ```
 
 #### CLI Options
 | Flag | Default | Description |
 |---|---|---|
 | `--run-benchmark` | `False` | Triggers the automated multi-condition benchmark pipeline |
-| `--conditions` | `1,2` | Comma-separated list of experimental conditions (`1,2`) |
+| `--conditions` | `1,2` | Comma-separated list of experimental conditions (`1`, `2`, `3`, `1,2,3`) |
+| `--generate-report` | `False` | Aggregate existing condition outputs and display 3-way comparative matrix |
 | `--limit` | `None` | Optional sample count limit for fast smoke testing |
 | `--model` | `gemma:2b` | Target LLM identifier (Ollama or local HuggingFace model) |
 | `--results-dir` | `results` | Output directory for raw output JSON and checkpoints |
 
 #### Features & Safeguards
-- **In-Context Prompt Formatter**: Standardizes strict RAG prompt layout across experimental conditions.
+- **In-Context Prompt Formatter**: Standardizes strict RAG prompt layout across all three experimental conditions.
 - **Auto-Checkpointing**: Periodically serializes progress every 25 samples to `results/checkpoints/{model}_{condition}_checkpoint.json` and resumes automatically on interruption.
-- **Statistical Significance**: Computes paired two-sided Wilcoxon signed-rank tests (`scipy.stats.wilcoxon`) and performance deltas ($\Delta$) across EM, Token F1, Grounding Score, Abstention, and Latency.
-- **Artifact Serialization**: Saves clean, verifiable raw generation traces to `results/gemma2b_condition1_raw.json` and `results/gemma2b_condition2_raw.json`.
+- **Statistical Significance**: Computes paired two-sided Wilcoxon signed-rank tests (`scipy.stats.wilcoxon`) and performance deltas ($\Delta$) across EM, Token F1, Grounding Score, Entity Misattribution, Abstention, and Latency for C1 vs C3 and C2 vs C3.
+- **Artifact Serialization**: Saves clean, verifiable raw generation traces to `results/gemma2b_condition1_raw.json`, `results/gemma2b_condition2_raw.json`, and `results/gemma2b_condition3_adversarial.json`, plus aggregated 3-way summary matrix in `results/gemma2b_3way_summary.json`.
 
 ### Custom Config Execution
 ```powershell
